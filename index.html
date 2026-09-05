@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Live Forex Rates</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap">
+    <span class="mark">FX</span>
+    <span class="tagline">Live interbank rates, streamed from MT4</span>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="status-row">
+    <span class="dot" id="statusDot"></span>
+    <span id="statusText">connecting…</span>
+    <span class="asof" id="asOf"></span>
+  </section>
+
+  <table class="price-table">
+    <thead>
+      <tr>
+        <th>Pair</th>
+        <th>Bid</th>
+        <th>Ask</th>
+        <th>Spread</th>
+      </tr>
+    </thead>
+    <tbody id="priceRows">
+      <tr><td colspan="4" class="empty">Waiting for price feed…</td></tr>
+    </tbody>
+  </table>
+
+  <p class="note">Rates update in real time from a live MetaTrader 4 terminal. For reference only — not an offer to trade.</p>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">Powered by MT4 → Python bridge</div>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="script.js"></script>
+</body>
+</html>
