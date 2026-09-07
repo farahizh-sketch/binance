@@ -99,7 +99,7 @@ function toggleChart(sym, entry, btn) {
   new TradingView.widget({
     autosize: true,
     symbol: tvSymbolFor(sym),
-    interval: "15",
+    interval: "5",
     timezone: "Asia/Kolkata",
     theme: "dark",
     style: "1",
