@@ -11,56 +11,132 @@ const statusText = document.getElementById("statusText");
 const asOf = document.getElementById("asOf");
 const commodityBody = document.getElementById("commodityRows");
 const forexBody = document.getElementById("forexRows");
-const priceMap = {};
-const lastPrices = {};
-let firstRender = true;
 
 const COMMODITY_SYMBOLS = ["XAUUSD", "XAGUSD", "XBRUSD"];
+
+// Map MT4 symbol names to TradingView symbols. Falls back to "OANDA:<symbol>"
+// if not listed here - edit this if your broker uses different naming.
+const TV_SYMBOL_MAP = {
+  XAUUSD: "OANDA:XAUUSD",
+  XAGUSD: "OANDA:XAGUSD",
+  XBRUSD: "TVC:UKOIL", // Brent crude - TradingView doesn't have a universal "XBRUSD" ticker
+};
+
+function tvSymbolFor(sym) {
+  return TV_SYMBOL_MAP[sym] || ("OANDA:" + sym);
+}
 
 function setStatus(state, label) {
   statusDot.className = "dot" + (state ? " " + state : "");
   statusText.textContent = label;
 }
 
-function rowHtml(sym) {
-  const p = priceMap[sym];
-  const prev = lastPrices[sym];
-  const bidDir = prev && p.bid > prev.bid ? "flash-up" : prev && p.bid < prev.bid ? "flash-down" : "";
-  const askDir = prev && p.ask > prev.ask ? "flash-up" : prev && p.ask < prev.ask ? "flash-down" : "";
-  const spread = (p.ask - p.bid).toFixed(5);
-  return `
-    <tr>
-      <td>${sym}</td>
-      <td class="price ${firstRender ? "" : bidDir}">${p.bid}</td>
-      <td class="price ${firstRender ? "" : askDir}">${p.ask}</td>
-      <td class="spread">${spread}</td>
-    </tr>`;
+// symbol -> { tr, bidCell, askCell, lastBid, lastAsk, chartRow, chartOpen }
+const rows = new Map();
+let widgetCounter = 0;
+
+function createRow(sym) {
+  const tr = document.createElement("tr");
+  tr.innerHTML = `
+    <td>${sym}</td>
+    <td class="price"></td>
+    <td class="price"></td>
+    <td><button class="chart-toggle" type="button">Chart ▾</button></td>
+  `;
+  const bidCell = tr.children[1];
+  const askCell = tr.children[2];
+  const toggleBtn = tr.querySelector(".chart-toggle");
+
+  const entry = { tr, bidCell, askCell, lastBid: null, lastAsk: null, chartRow: null, chartOpen: false };
+
+  toggleBtn.addEventListener("click", () => toggleChart(sym, entry, toggleBtn));
+
+  rows.set(sym, entry);
+  return entry;
 }
 
-function render() {
-  const allSymbols = Object.keys(priceMap);
-  const commoditySymbols = COMMODITY_SYMBOLS.filter(s => priceMap[s]);
-  const forexSymbols = allSymbols.filter(s => !COMMODITY_SYMBOLS.includes(s)).sort();
+function toggleChart(sym, entry, btn) {
+  if (entry.chartOpen) {
+    // collapse
+    if (entry.chartRow) entry.chartRow.remove();
+    entry.chartRow = null;
+    entry.chartOpen = false;
+    btn.textContent = "Chart ▾";
+    return;
+  }
 
-  commodityBody.innerHTML = '<tr><td colspan="4" class="group-heading">Commodities</td></tr>' +
-    (commoditySymbols.length
-      ? commoditySymbols.map(rowHtml).join("")
-      : '<tr><td colspan="4" class="empty">Waiting for price feed…</td></tr>');
+  // expand: insert a new row right after this pair's row with the chart embedded
+  const chartRow = document.createElement("tr");
+  chartRow.className = "chart-row";
+  const td = document.createElement("td");
+  td.colSpan = 4;
+  const containerId = "tv_widget_" + (widgetCounter++);
+  const container = document.createElement("div");
+  container.id = containerId;
+  container.className = "tradingview-widget-container";
+  td.appendChild(container);
+  chartRow.appendChild(td);
 
-  forexBody.innerHTML = '<tr><td colspan="4" class="group-heading">Forex</td></tr>' +
-    (forexSymbols.length
-      ? forexSymbols.map(rowHtml).join("")
-      : '<tr><td colspan="4" class="empty">Waiting for price feed…</td></tr>');
+  entry.tr.insertAdjacentElement("afterend", chartRow);
+  entry.chartRow = chartRow;
+  entry.chartOpen = true;
+  btn.textContent = "Hide chart ▴";
 
-  allSymbols.forEach(sym => lastPrices[sym] = { ...priceMap[sym] });
-  firstRender = false;
+  new TradingView.widget({
+    autosize: true,
+    symbol: tvSymbolFor(sym),
+    interval: "15",
+    timezone: "Etc/UTC",
+    theme: "dark",
+    style: "1",
+    locale: "en",
+    toolbar_bg: "#11161f",
+    enable_publishing: false,
+    hide_legend: false,
+    save_image: false,
+    container_id: containerId
+  });
+}
+
+function updatePriceCell(cell, newValue, oldValue) {
+  cell.textContent = newValue;
+  cell.classList.remove("flash-up", "flash-down");
+  if (oldValue !== null) {
+    if (newValue > oldValue) cell.classList.add("flash-up");
+    else if (newValue < oldValue) cell.classList.add("flash-down");
+    // force reflow so the transition re-triggers on repeated flashes
+    void cell.offsetWidth;
+  }
+  setTimeout(() => cell.classList.remove("flash-up", "flash-down"), 700);
+}
+
+function ensureHeadingRow(tbody, label) {
+  if (!tbody.querySelector(".group-heading")) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td colspan="4" class="group-heading">${label}</td>`;
+    tbody.appendChild(tr);
+  }
+  const empty = tbody.querySelector(".empty");
+  if (empty) empty.closest("tr").remove();
+}
+
+function upsertPrice(symbol, bid, ask) {
+  const isCommodity = COMMODITY_SYMBOLS.includes(symbol);
+  const tbody = isCommodity ? commodityBody : forexBody;
+
+  let entry = rows.get(symbol);
+  if (!entry) {
+    ensureHeadingRow(tbody, isCommodity ? "Commodities" : "Forex");
+    entry = createRow(symbol);
+    tbody.appendChild(entry.tr);
+  }
+
+  updatePriceCell(entry.bidCell, bid, entry.lastBid);
+  updatePriceCell(entry.askCell, ask, entry.lastAsk);
+  entry.lastBid = bid;
+  entry.lastAsk = ask;
+
   asOf.textContent = "as of " + new Date().toLocaleTimeString();
-
-  setTimeout(() => {
-    document.querySelectorAll(".price").forEach(el => {
-      el.classList.remove("flash-up", "flash-down");
-    });
-  }, 700);
 }
 
 async function loadInitialPrices() {
@@ -70,10 +146,7 @@ async function loadInitialPrices() {
     setStatus("down", "connection error");
     return;
   }
-  data.forEach(row => {
-    priceMap[row.symbol] = { bid: row.bid, ask: row.ask };
-  });
-  render();
+  data.forEach(row => upsertPrice(row.symbol, row.bid, row.ask));
 }
 
 function subscribeToUpdates() {
@@ -85,8 +158,7 @@ function subscribeToUpdates() {
       (payload) => {
         const row = payload.new;
         if (row && row.symbol) {
-          priceMap[row.symbol] = { bid: row.bid, ask: row.ask };
-          render();
+          upsertPrice(row.symbol, row.bid, row.ask);
         }
       }
     )
