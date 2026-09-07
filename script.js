@@ -100,7 +100,7 @@ function toggleChart(sym, entry, btn) {
     autosize: true,
     symbol: tvSymbolFor(sym),
     interval: "15",
-    timezone: "Etc/UTC",
+    timezone: "Asia/Kolkata",
     theme: "dark",
     style: "1",
     locale: "en",
