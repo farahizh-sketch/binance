@@ -99,6 +99,15 @@ main.wrap { padding: 32px 20px 60px; }
   font-size: 15px;
   letter-spacing: 0.01em;
 }
+.symbol-sub {
+  display: block;
+  font-family: 'Inter', sans-serif;
+  font-weight: 400;
+  font-size: 11px;
+  letter-spacing: normal;
+  color: var(--muted);
+  margin-top: 2px;
+}
 .price-table thead th:last-child { text-align: right; }
 
 .price-table tbody td:last-child { text-align: right; }
