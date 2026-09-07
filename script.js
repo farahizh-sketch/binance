@@ -35,10 +35,24 @@ function setStatus(state, label) {
 const rows = new Map();
 let widgetCounter = 0;
 
+// Friendly subtitle shown under commodity symbol names
+const COMMODITY_LABELS = {
+  XAUUSD: "Gold",
+  XAGUSD: "Silver",
+  XBRUSD: "Crude",
+};
+
+function symbolCellHtml(sym) {
+  const label = COMMODITY_LABELS[sym];
+  return label
+    ? `${sym}<span class="symbol-sub">${label}</span>`
+    : sym;
+}
+
 function createRow(sym) {
   const tr = document.createElement("tr");
   tr.innerHTML = `
-    <td>${sym}</td>
+    <td>${symbolCellHtml(sym)}</td>
     <td class="price"></td>
     <td class="price"></td>
     <td><button class="chart-toggle" type="button">Chart ▾</button></td>
