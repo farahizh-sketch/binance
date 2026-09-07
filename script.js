@@ -1,7 +1,7 @@
 // ---- CONFIG ----
 // From your Supabase project: Project Settings > API
-const SUPABASE_URL = "https://pjibstvqozftsmcsjtsz.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_-Gf1DBodO9W61U0myjvFpg_KzD6yBcx"; // safe to expose in frontend code
+const SUPABASE_URL = "https://YOUR_PROJECT_ID.supabase.co";
+const SUPABASE_ANON_KEY = "YOUR_ANON_PUBLIC_KEY"; // safe to expose in frontend code
 // ------------------
 
 const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -9,40 +9,50 @@ const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_
 const statusDot = document.getElementById("statusDot");
 const statusText = document.getElementById("statusText");
 const asOf = document.getElementById("asOf");
-const rowsBody = document.getElementById("priceRows");
+const commodityBody = document.getElementById("commodityRows");
+const forexBody = document.getElementById("forexRows");
 const priceMap = {};
 const lastPrices = {};
 let firstRender = true;
+
+const COMMODITY_SYMBOLS = ["XAUUSD", "XAGUSD", "XBRUSD"];
 
 function setStatus(state, label) {
   statusDot.className = "dot" + (state ? " " + state : "");
   statusText.textContent = label;
 }
 
+function rowHtml(sym) {
+  const p = priceMap[sym];
+  const prev = lastPrices[sym];
+  const bidDir = prev && p.bid > prev.bid ? "flash-up" : prev && p.bid < prev.bid ? "flash-down" : "";
+  const askDir = prev && p.ask > prev.ask ? "flash-up" : prev && p.ask < prev.ask ? "flash-down" : "";
+  const spread = (p.ask - p.bid).toFixed(5);
+  return `
+    <tr>
+      <td>${sym}</td>
+      <td class="price ${firstRender ? "" : bidDir}">${p.bid}</td>
+      <td class="price ${firstRender ? "" : askDir}">${p.ask}</td>
+      <td class="spread">${spread}</td>
+    </tr>`;
+}
+
 function render() {
-  const symbols = Object.keys(priceMap).sort();
+  const allSymbols = Object.keys(priceMap);
+  const commoditySymbols = COMMODITY_SYMBOLS.filter(s => priceMap[s]);
+  const forexSymbols = allSymbols.filter(s => !COMMODITY_SYMBOLS.includes(s)).sort();
 
-  if (symbols.length === 0) {
-    rowsBody.innerHTML = '<tr><td colspan="4" class="empty">Waiting for price feed…</td></tr>';
-    return;
-  }
+  commodityBody.innerHTML = '<tr><td colspan="4" class="group-heading">Commodities</td></tr>' +
+    (commoditySymbols.length
+      ? commoditySymbols.map(rowHtml).join("")
+      : '<tr><td colspan="4" class="empty">Waiting for price feed…</td></tr>');
 
-  rowsBody.innerHTML = symbols.map(sym => {
-    const p = priceMap[sym];
-    const prev = lastPrices[sym];
-    const bidDir = prev && p.bid > prev.bid ? "flash-up" : prev && p.bid < prev.bid ? "flash-down" : "";
-    const askDir = prev && p.ask > prev.ask ? "flash-up" : prev && p.ask < prev.ask ? "flash-down" : "";
-    const spread = (p.ask - p.bid).toFixed(5);
-    return `
-      <tr>
-        <td>${sym}</td>
-        <td class="price ${firstRender ? "" : bidDir}">${p.bid}</td>
-        <td class="price ${firstRender ? "" : askDir}">${p.ask}</td>
-        <td class="spread">${spread}</td>
-      </tr>`;
-  }).join("");
+  forexBody.innerHTML = '<tr><td colspan="4" class="group-heading">Forex</td></tr>' +
+    (forexSymbols.length
+      ? forexSymbols.map(rowHtml).join("")
+      : '<tr><td colspan="4" class="empty">Waiting for price feed…</td></tr>');
 
-  symbols.forEach(sym => lastPrices[sym] = { ...priceMap[sym] });
+  allSymbols.forEach(sym => lastPrices[sym] = { ...priceMap[sym] });
   firstRender = false;
   asOf.textContent = "as of " + new Date().toLocaleTimeString();
 
