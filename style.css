@@ -102,6 +102,42 @@ main.wrap { padding: 28px 16px 60px; }
 tr.chart-row td { padding: 0; border-bottom: 1px solid var(--border); }
 .tradingview-widget-container { height: 400px; width: 100%; border-top: 1px solid var(--border); }
 
+/* inline buy / sell under price cells */
+.price-cell { text-align: right; vertical-align: middle; }
+.price-cell .price { display: block; font-variant-numeric: tabular-nums; font-size: 16px; }
+.btn-buy-inline {
+  display: inline-block; margin-top: 4px; font-size: 10px; font-weight: 700;
+  padding: 2px 8px; border-radius: 3px; border: none; cursor: pointer;
+  background: #15803d; color: #bbf7d0;
+}
+.btn-buy-inline:hover { background: #166534; }
+.btn-sell-inline {
+  display: inline-block; margin-top: 4px; font-size: 10px; font-weight: 700;
+  padding: 2px 8px; border-radius: 3px; border: none; cursor: pointer;
+  background: #991b1b; color: #fca5a5;
+}
+.btn-sell-inline:hover { background: #7f1d1d; }
+
+/* live price ticker inside modals */
+.live-price-ticker {
+  display: flex; justify-content: space-between; align-items: center;
+  background: #0d1219; border: 1px solid var(--border); border-radius: 8px;
+  padding: 14px 16px; margin-bottom: 4px;
+}
+.ticker-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.ticker-price {
+  font-family: 'Space Grotesk', monospace; font-size: 26px; font-weight: 600;
+  font-variant-numeric: tabular-nums; color: var(--text); transition: color .3s;
+}
+.ticker-price.up   { color: var(--up); }
+.ticker-price.down { color: var(--down); }
+
+.btn-danger-full {
+  background: #991b1b; color: #fca5a5; padding: 10px 16px; border-radius: 6px;
+  border: none; cursor: pointer; font-size: 14px; font-weight: 600; flex: 1;
+}
+.btn-danger-full:hover { background: #7f1d1d; }
+
 .note { margin-top: 16px; font-size: 12px; color: var(--muted); }
 
 /* ── PANELS ──────────────────────────────────────────────────────────────── */
