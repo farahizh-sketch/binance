@@ -309,30 +309,54 @@ async function executeBuy() {
 // Called from the inline Sell button on the price table row
 function openSellBySymbol(symbol) {
   if (!session) return;
-  // find an open position for this symbol owned by the current user
-  const pos = positions.find(p => p.symbol === symbol);
-  if (!pos) return alert(`No open position found for ${symbol}.`);
-  openSellModal(pos);
+  const p = priceMap[symbol];
+  if (!p) return alert('No price available yet for ' + symbol);
+  // if user has an open position for this symbol, pre-fill it
+  const existing = positions.find(pos => pos.symbol === symbol);
+  if (existing) {
+    openSellModal(existing);
+  } else {
+    // open a fresh short sell
+    openSellModal({ symbol, entry_price: p.bid, quantity: 1, id: null, isFresh: true });
+  }
 }
 
 function openSellModal(pos) {
   sellTarget = pos;
+  const isFresh = !!pos.isFresh;
+  const p = priceMap[pos.symbol] || {};
+
   document.getElementById('sellSymbol').textContent = pos.symbol;
-  document.getElementById('sellEntry').textContent  = fmt(pos.entry_price);
-  document.getElementById('sellQty').textContent    = pos.quantity;
+  document.getElementById('sellModalTitle').innerHTML =
+    (isFresh ? 'New Sell: ' : 'Close Position: ') +
+    `<span id="sellSymbol">${pos.symbol}</span>`;
+  document.getElementById('sellEntry').textContent = isFresh ? (p.bid || '--') : fmt(pos.entry_price);
+
+  // quantity: fixed for existing positions, editable for fresh sells
+  document.getElementById('sellQtyRow').style.display      = isFresh ? 'none' : '';
+  document.getElementById('sellQtyInputRow').style.display = isFresh ? '' : 'none';
+  if (!isFresh) document.getElementById('sellQtyDisplay').textContent = pos.quantity;
+  if (isFresh)  document.getElementById('sellQtyInput').value = 1;
+
   refreshSellModal();
   document.getElementById('sellModal').classList.remove('hidden');
 }
+
 function refreshSellModal() {
   if (!sellTarget) return;
-  const p   = priceMap[sellTarget.symbol] || {};
-  const bid = p.bid || sellTarget.entry_price || 0;
-  const pnl = (bid - sellTarget.entry_price) * sellTarget.quantity;
+  const p    = priceMap[sellTarget.symbol] || {};
+  const bid  = p.bid || sellTarget.entry_price || 0;
+  const qty  = sellTarget.isFresh
+    ? (parseFloat(document.getElementById('sellQtyInput').value) || 1)
+    : sellTarget.quantity;
+  const pnl  = (sellTarget.isFresh ? 0 : (bid - sellTarget.entry_price) * qty);
+
   const liveBidEl = document.getElementById('sellLiveBid');
   liveBidEl.textContent = bid;
-  liveBidEl.className = 'ticker-price ' + (bid >= sellTarget.entry_price ? 'up' : 'down');
-  document.getElementById('sellPnl').textContent = fmtINR(pnl);
-  document.getElementById('sellPnl').style.color = pnl >= 0 ? 'var(--up)' : 'var(--down)';
+  liveBidEl.className   = 'ticker-price ' + (bid >= (sellTarget.entry_price || bid) ? 'up' : 'down');
+
+  document.getElementById('sellPnl').textContent  = sellTarget.isFresh ? fmtINR(bid * qty) + ' received' : fmtINR(pnl);
+  document.getElementById('sellPnl').style.color  = sellTarget.isFresh ? 'var(--text)' : (pnl >= 0 ? 'var(--up)' : 'var(--down)');
 }
 function closeSellModal() {
   document.getElementById('sellModal').classList.add('hidden');
@@ -343,25 +367,48 @@ async function executeSell() {
   if (!session || !sellTarget) return;
   const p     = priceMap[sellTarget.symbol] || {};
   const price = p.bid || sellTarget.entry_price;
-  const total = price * sellTarget.quantity;
-  const pnl   = (price - sellTarget.entry_price) * sellTarget.quantity;
+  const isFresh = !!sellTarget.isFresh;
+  const qty   = isFresh
+    ? (parseFloat(document.getElementById('sellQtyInput').value) || 1)
+    : sellTarget.quantity;
+  const total = price * qty;
+  const pnl   = isFresh ? 0 : (price - sellTarget.entry_price) * qty;
   const newBalance = session.wallet + total;
 
-  await Promise.all([
-    api('deletePosition', { id: sellTarget.id }),
-    api('placeOrder', { mobile: session.mobile, symbol: sellTarget.symbol, side: 'SELL', quantity: sellTarget.quantity, price }),
-    api('updateWalletWithLedger', {
-      mobile: session.mobile, newBalance, type: 'CREDIT', amount: total,
-      narration: `SELL ${sellTarget.symbol} x${sellTarget.quantity} @ ${price}`
-    })
-  ]);
-
-  session.wallet = newBalance;
-  updateWalletDisplay();
-  positions = positions.filter(p => p.id !== sellTarget.id);
-  renderPositions();
-  closeSellModal();
-  alert(`✅ Sold! P&L: ${fmtINR(pnl)}`);
+  if (isFresh) {
+    // fresh short sell: log the order + add a short position + credit wallet
+    const [posRes] = await Promise.all([
+      api('addPosition', { mobile: session.mobile, symbol: sellTarget.symbol, side: 'SELL', quantity: qty, entry_price: price }),
+      api('placeOrder',  { mobile: session.mobile, symbol: sellTarget.symbol, side: 'SELL', quantity: qty, price }),
+      api('updateWalletWithLedger', {
+        mobile: session.mobile, newBalance, type: 'CREDIT', amount: total,
+        narration: `SELL ${sellTarget.symbol} x${qty} @ ${price}`
+      })
+    ]);
+    if (posRes.error) return alert('❌ Sell failed: ' + JSON.stringify(posRes.error));
+    session.wallet = newBalance;
+    updateWalletDisplay();
+    positions.push(posRes.data);
+    renderPositions();
+    closeSellModal();
+    alert(`✅ Sell order placed! ${qty} × ${sellTarget.symbol} @ ${price}`);
+  } else {
+    // closing an existing position
+    await Promise.all([
+      api('deletePosition', { id: sellTarget.id }),
+      api('placeOrder', { mobile: session.mobile, symbol: sellTarget.symbol, side: 'SELL', quantity: qty, price }),
+      api('updateWalletWithLedger', {
+        mobile: session.mobile, newBalance, type: 'CREDIT', amount: total,
+        narration: `SELL ${sellTarget.symbol} x${qty} @ ${price}`
+      })
+    ]);
+    session.wallet = newBalance;
+    updateWalletDisplay();
+    positions = positions.filter(p => p.id !== sellTarget.id);
+    renderPositions();
+    closeSellModal();
+    alert(`✅ Position closed! P&L: ${fmtINR(pnl)}`);
+  }
   syncData();
 }
 
