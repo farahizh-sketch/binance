@@ -4,191 +4,575 @@ const SUPABASE_URL = "https://pjibstvqozftsmcsjtsz.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_-Gf1DBodO9W61U0myjvFpg_KzD6yBcx"; // safe to expose in frontend code
 // ------------------
 
-const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-const statusDot = document.getElementById("statusDot");
-const statusText = document.getElementById("statusText");
-const asOf = document.getElementById("asOf");
-const commodityBody = document.getElementById("commodityRows");
-const forexBody = document.getElementById("forexRows");
+// ── STATE ────────────────────────────────────────────────────────────────────
+let session     = null;   // { mobile, isAdmin, wallet }
+let priceMap    = {};     // { symbol: { bid, ask } }
+let positions   = [];     // array of position objects from DB
+let orderHist   = [];
+let ledgerData  = [];
+let allUsers    = [];
+let allPositions = [];
+let buyTarget   = null;   // { symbol, ask }
+let sellTarget  = null;   // position object
+let jvType      = 'CREDIT';
+let widgetCtr   = 0;
 
-const COMMODITY_SYMBOLS = ["XAUUSD", "XAGUSD", "XBRUSD"];
+const COMMODITY_SYMBOLS = ['XAUUSD', 'XAGUSD', 'XBRUSD'];
+const COMMODITY_LABELS  = { XAUUSD: 'Gold', XAGUSD: 'Silver', XBRUSD: 'Crude' };
+const TV_SYMBOLS        = { XAUUSD: 'OANDA:XAUUSD', XAGUSD: 'OANDA:XAGUSD', XBRUSD: 'TVC:UKOIL' };
+const rowRegistry       = new Map(); // symbol → { tr, bidCell, askCell, lastBid, lastAsk, chartRow, chartOpen }
 
-// Map MT4 symbol names to TradingView symbols. Falls back to "OANDA:<symbol>"
-// if not listed here - edit this if your broker uses different naming.
-const TV_SYMBOL_MAP = {
-  XAUUSD: "OANDA:XAUUSD",
-  XAGUSD: "OANDA:XAGUSD",
-  XBRUSD: "TVC:UKOIL", // Brent crude - TradingView doesn't have a universal "XBRUSD" ticker
-};
-
-function tvSymbolFor(sym) {
-  return TV_SYMBOL_MAP[sym] || ("OANDA:" + sym);
-}
-
-function setStatus(state, label) {
-  statusDot.className = "dot" + (state ? " " + state : "");
-  statusText.textContent = label;
-}
-
-// symbol -> { tr, bidCell, askCell, lastBid, lastAsk, chartRow, chartOpen }
-const rows = new Map();
-let widgetCounter = 0;
-
-// Friendly subtitle shown under commodity symbol names
-const COMMODITY_LABELS = {
-  XAUUSD: "Gold",
-  XAGUSD: "Silver",
-  XBRUSD: "Crude",
-};
-
-function symbolCellHtml(sym) {
-  const label = COMMODITY_LABELS[sym];
-  return label
-    ? `${sym}<span class="symbol-sub">${label}</span>`
-    : sym;
-}
-
-function createRow(sym) {
-  const tr = document.createElement("tr");
-  tr.innerHTML = `
-    <td>${symbolCellHtml(sym)}</td>
-    <td class="price"></td>
-    <td class="price"></td>
-    <td><button class="chart-toggle" type="button">Chart ▾</button></td>
-  `;
-  const bidCell = tr.children[1];
-  const askCell = tr.children[2];
-  const toggleBtn = tr.querySelector(".chart-toggle");
-
-  const entry = { tr, bidCell, askCell, lastBid: null, lastAsk: null, chartRow: null, chartOpen: false };
-
-  toggleBtn.addEventListener("click", () => toggleChart(sym, entry, toggleBtn));
-
-  rows.set(sym, entry);
-  return entry;
-}
-
-function toggleChart(sym, entry, btn) {
-  if (entry.chartOpen) {
-    // collapse
-    if (entry.chartRow) entry.chartRow.remove();
-    entry.chartRow = null;
-    entry.chartOpen = false;
-    btn.textContent = "Chart ▾";
-    return;
-  }
-
-  // expand: insert a new row right after this pair's row with the chart embedded
-  const chartRow = document.createElement("tr");
-  chartRow.className = "chart-row";
-  const td = document.createElement("td");
-  td.colSpan = 4;
-  const containerId = "tv_widget_" + (widgetCounter++);
-  const container = document.createElement("div");
-  container.id = containerId;
-  container.className = "tradingview-widget-container";
-  td.appendChild(container);
-  chartRow.appendChild(td);
-
-  entry.tr.insertAdjacentElement("afterend", chartRow);
-  entry.chartRow = chartRow;
-  entry.chartOpen = true;
-  btn.textContent = "Hide chart ▴";
-
-  new TradingView.widget({
-    autosize: true,
-    symbol: tvSymbolFor(sym),
-    interval: "5",
-    timezone: "Asia/Kolkata",
-    theme: "dark",
-    style: "1",
-    locale: "en",
-    toolbar_bg: "#11161f",
-    enable_publishing: false,
-    hide_legend: false,
-    save_image: false,
-    container_id: containerId
+// ── API HELPER ───────────────────────────────────────────────────────────────
+async function api(action, payload = {}) {
+  const res = await fetch('/api/supabase', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action, payload })
   });
+  return res.json();
 }
 
-function updatePriceCell(cell, newValue, oldValue) {
-  cell.textContent = newValue;
-  cell.classList.remove("flash-up", "flash-down");
-  if (oldValue !== null) {
-    if (newValue > oldValue) cell.classList.add("flash-up");
-    else if (newValue < oldValue) cell.classList.add("flash-down");
-    // force reflow so the transition re-triggers on repeated flashes
-    void cell.offsetWidth;
+// ── UTILS ────────────────────────────────────────────────────────────────────
+function fmt(n, d = 2) { return parseFloat(n).toFixed(d); }
+function fmtINR(n) { return '₹' + parseFloat(n).toLocaleString('en-IN', { minimumFractionDigits: 2 }); }
+function toIST(ts) {
+  return new Date(ts).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false });
+}
+function setStatus(state, label) {
+  document.getElementById('statusDot').className = 'dot' + (state ? ' ' + state : '');
+  document.getElementById('statusText').textContent = label;
+}
+
+// ── LOGIN ────────────────────────────────────────────────────────────────────
+async function handleLogin() {
+  const mobile   = document.getElementById('loginMobile').value.trim();
+  const password = document.getElementById('loginPassword').value;
+  const errEl    = document.getElementById('loginError');
+  const btn      = document.getElementById('loginBtn');
+  errEl.textContent = '';
+
+  if (!/^\d{10}$/.test(mobile)) { errEl.textContent = 'Enter a valid 10-digit mobile number.'; return; }
+  if (!password) { errEl.textContent = 'Enter your password.'; return; }
+
+  btn.textContent = 'CONNECTING…';
+  btn.disabled = true;
+
+  const res = await api('login', { mobile, password });
+  btn.textContent = 'ACCESS DASHBOARD';
+  btn.disabled = false;
+
+  if (res.error) { errEl.textContent = res.error === 'Incorrect Password' ? '❌ Incorrect password.' : '❌ ' + res.error; return; }
+
+  session = { mobile: res.data.mobile, isAdmin: res.data.is_admin, wallet: parseFloat(res.data.wallet_balance) };
+  localStorage.setItem('session', JSON.stringify(session));
+  bootDashboard();
+}
+
+function logout() {
+  localStorage.removeItem('session');
+  session = null;
+  document.getElementById('loginOverlay').classList.remove('hidden');
+  document.getElementById('loginOverlay').style.display = 'flex';
+  document.getElementById('walletChip').style.display = 'none';
+  document.getElementById('adminBtn').style.display = 'none';
+  document.getElementById('actionHeader').style.display = 'none';
+  document.querySelectorAll('.trade-cell').forEach(el => el.style.display = 'none');
+  hidePanel('positionsPanel');
+  hidePanel('historyPanel');
+  hidePanel('ledgerPanel');
+  hidePanel('adminPanel');
+}
+
+function bootDashboard() {
+  document.getElementById('loginOverlay').style.display = 'none';
+  updateWalletDisplay();
+
+  if (session.isAdmin) {
+    document.getElementById('adminBtn').style.display = '';
+    document.getElementById('ledgerTitle').textContent = 'Client Ledger';
   }
-  setTimeout(() => cell.classList.remove("flash-up", "flash-down"), 700);
+
+  // show Trade column
+  document.getElementById('actionHeader').style.display = '';
+  document.querySelectorAll('.trade-cell').forEach(el => el.style.display = '');
+
+  syncData();
+  setInterval(syncData, 10000);
 }
 
-function ensureHeadingRow(tbody, label) {
-  if (!tbody.querySelector(".group-heading")) {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `<td colspan="4" class="group-heading">${label}</td>`;
-    tbody.appendChild(tr);
-  }
-  const empty = tbody.querySelector(".empty");
-  if (empty) empty.closest("tr").remove();
+// ── WALLET ───────────────────────────────────────────────────────────────────
+function updateWalletDisplay() {
+  document.getElementById('walletChip').style.display = '';
+  document.getElementById('walletAmt').textContent =
+    session.wallet.toLocaleString('en-IN', { minimumFractionDigits: 2 });
 }
 
-function upsertPrice(symbol, bid, ask) {
-  const isCommodity = COMMODITY_SYMBOLS.includes(symbol);
-  const tbody = isCommodity ? commodityBody : forexBody;
-
-  let entry = rows.get(symbol);
-  if (!entry) {
-    ensureHeadingRow(tbody, isCommodity ? "Commodities" : "Forex");
-    entry = createRow(symbol);
-    tbody.appendChild(entry.tr);
-  }
-
-  updatePriceCell(entry.bidCell, bid, entry.lastBid);
-  updatePriceCell(entry.askCell, ask, entry.lastAsk);
-  entry.lastBid = bid;
-  entry.lastAsk = ask;
-
-  asOf.textContent = "as of " + new Date().toLocaleTimeString();
-}
-
+// ── PRICE FEED (Supabase Realtime) ───────────────────────────────────────────
 async function loadInitialPrices() {
-  const { data, error } = await supabaseClient.from("live_prices").select("*");
-  if (error) {
-    console.error("Initial load failed", error);
-    setStatus("down", "connection error");
-    return;
-  }
-  data.forEach(row => upsertPrice(row.symbol, row.bid, row.ask));
+  const { data } = await sb.from('live_prices').select('*');
+  if (data) data.forEach(r => updatePrice(r.symbol, r.bid, r.ask));
 }
 
-function subscribeToUpdates() {
-  supabaseClient
-    .channel("live_prices_changes")
-    .on(
-      "postgres_changes",
-      { event: "*", schema: "public", table: "live_prices" },
-      (payload) => {
-        const row = payload.new;
-        if (row && row.symbol) {
-          upsertPrice(row.symbol, row.bid, row.ask);
-        }
-      }
-    )
-    .subscribe((status) => {
-      if (status === "SUBSCRIBED") {
-        setStatus("live", "live");
-      } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-        setStatus("down", "disconnected — retrying…");
-      }
+function subscribePrices() {
+  sb.channel('live_prices_changes')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'live_prices' }, p => {
+      const r = p.new;
+      if (r?.symbol) updatePrice(r.symbol, r.bid, r.ask);
+    })
+    .subscribe(s => {
+      if (s === 'SUBSCRIBED') setStatus('live', 'live');
+      else if (s === 'CHANNEL_ERROR' || s === 'TIMED_OUT') setStatus('down', 'disconnected — retrying…');
     });
 }
 
-async function init() {
-  setStatus("", "connecting…");
-  await loadInitialPrices();
-  subscribeToUpdates();
+function updatePrice(symbol, bid, ask) {
+  priceMap[symbol] = { bid, ask };
+  document.getElementById('asOf').textContent = 'as of ' + new Date().toLocaleTimeString();
+  upsertRow(symbol, bid, ask);
+  // refresh open sell modal if it's for this symbol
+  if (sellTarget?.symbol === symbol) refreshSellModal();
 }
 
-init();
+// ── ROW RENDERING ─────────────────────────────────────────────────────────────
+function tvSymbol(sym) { return TV_SYMBOLS[sym] || 'OANDA:' + sym; }
+
+function upsertRow(symbol, bid, ask) {
+  const isCommodity = COMMODITY_SYMBOLS.includes(symbol);
+  const tbody = document.getElementById(isCommodity ? 'commodityRows' : 'forexRows');
+  const label = COMMODITY_LABELS[symbol];
+
+  let entry = rowRegistry.get(symbol);
+  if (!entry) {
+    // clear placeholder
+    const empty = tbody.querySelector('.empty');
+    if (empty) empty.closest('tr').remove();
+
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>
+        ${symbol}
+        ${label ? `<span class="symbol-sub">${label}</span>` : ''}
+      </td>
+      <td class="price"></td>
+      <td class="price"></td>
+      <td><button class="chart-toggle" onclick="toggleChart('${symbol}')">Chart ▾</button></td>
+      <td class="trade-cell" style="${session ? '' : 'display:none'}">
+        <button class="btn-buy" onclick="openBuyModal('${symbol}')">Buy</button>
+      </td>`;
+    tbody.appendChild(tr);
+
+    entry = {
+      tr,
+      bidCell: tr.children[1],
+      askCell: tr.children[2],
+      lastBid: null, lastAsk: null,
+      chartRow: null, chartOpen: false
+    };
+    rowRegistry.set(symbol, entry);
+  }
+
+  flashCell(entry.bidCell, bid, entry.lastBid);
+  flashCell(entry.askCell, ask, entry.lastAsk);
+  entry.lastBid = bid;
+  entry.lastAsk = ask;
+}
+
+function flashCell(cell, newVal, oldVal) {
+  cell.textContent = newVal;
+  cell.classList.remove('flash-up', 'flash-down');
+  if (oldVal !== null) {
+    if (newVal > oldVal) cell.classList.add('flash-up');
+    else if (newVal < oldVal) cell.classList.add('flash-down');
+    void cell.offsetWidth;
+  }
+  setTimeout(() => cell.classList.remove('flash-up', 'flash-down'), 700);
+}
+
+// ── CHART ────────────────────────────────────────────────────────────────────
+function toggleChart(symbol) {
+  const entry = rowRegistry.get(symbol);
+  if (!entry) return;
+  const btn = entry.tr.querySelector('.chart-toggle');
+
+  if (entry.chartOpen) {
+    entry.chartRow?.remove();
+    entry.chartRow = null;
+    entry.chartOpen = false;
+    btn.textContent = 'Chart ▾';
+    return;
+  }
+
+  const chartRow = document.createElement('tr');
+  chartRow.className = 'chart-row';
+  const td = document.createElement('td');
+  td.colSpan = 5;
+  const id = 'tv_' + (widgetCtr++);
+  const div = document.createElement('div');
+  div.id = id;
+  div.className = 'tradingview-widget-container';
+  td.appendChild(div);
+  chartRow.appendChild(td);
+  entry.tr.insertAdjacentElement('afterend', chartRow);
+  entry.chartRow = chartRow;
+  entry.chartOpen = true;
+  btn.textContent = 'Hide chart ▴';
+
+  new TradingView.widget({
+    autosize: true, symbol: tvSymbol(symbol), interval: '15',
+    timezone: 'Asia/Kolkata', theme: 'dark', style: '1', locale: 'en',
+    toolbar_bg: '#11161f', enable_publishing: false, save_image: false,
+    container_id: id
+  });
+}
+
+// ── BUY ──────────────────────────────────────────────────────────────────────
+function openBuyModal(symbol) {
+  if (!session) return;
+  const p = priceMap[symbol];
+  if (!p) return alert('No price available yet for ' + symbol);
+  buyTarget = { symbol, ask: p.ask };
+  document.getElementById('buySymbol').textContent = symbol;
+  document.getElementById('buyAsk').textContent = p.ask;
+  document.getElementById('buyQty').value = 1;
+  calcBuyCost();
+  document.getElementById('buyModal').classList.remove('hidden');
+}
+function closeBuyModal() {
+  document.getElementById('buyModal').classList.add('hidden');
+  buyTarget = null;
+}
+function calcBuyCost() {
+  const qty = parseFloat(document.getElementById('buyQty').value) || 0;
+  document.getElementById('buyCost').textContent = fmtINR(qty * (buyTarget?.ask || 0));
+}
+document.getElementById('buyQty').addEventListener('input', calcBuyCost);
+
+async function executeBuy() {
+  if (!session || !buyTarget) return;
+  const qty   = parseFloat(document.getElementById('buyQty').value);
+  const price = buyTarget.ask;
+  const cost  = qty * price;
+  if (qty <= 0) return alert('Enter a valid quantity.');
+  if (cost > session.wallet) return alert('❌ Insufficient wallet balance.');
+
+  const newBalance = session.wallet - cost;
+
+  const [posRes, , walRes] = await Promise.all([
+    api('addPosition', { mobile: session.mobile, symbol: buyTarget.symbol, side: 'BUY', quantity: qty, entry_price: price }),
+    api('placeOrder',  { mobile: session.mobile, symbol: buyTarget.symbol, side: 'BUY', quantity: qty, price }),
+    api('updateWalletWithLedger', {
+      mobile: session.mobile, newBalance, type: 'DEBIT', amount: cost,
+      narration: `BUY ${buyTarget.symbol} x${qty} @ ${price}`
+    })
+  ]);
+
+  if (posRes.error) return alert('❌ Order failed: ' + JSON.stringify(posRes.error));
+  session.wallet = newBalance;
+  updateWalletDisplay();
+  positions.push(posRes.data);
+  renderPositions();
+  closeBuyModal();
+  alert(`✅ Bought ${qty} × ${buyTarget.symbol} @ ${price}`);
+  syncData();
+}
+
+// ── SELL ─────────────────────────────────────────────────────────────────────
+function openSellModal(pos) {
+  sellTarget = pos;
+  const p = priceMap[pos.symbol] || {};
+  document.getElementById('sellSymbol').textContent = pos.symbol;
+  document.getElementById('sellEntry').textContent  = fmt(pos.entry_price);
+  document.getElementById('sellQty').textContent    = pos.quantity;
+  refreshSellModal();
+  document.getElementById('sellModal').classList.remove('hidden');
+}
+function refreshSellModal() {
+  const p = priceMap[sellTarget?.symbol] || {};
+  const bid = p.bid || sellTarget?.entry_price || 0;
+  const pnl = (bid - sellTarget.entry_price) * sellTarget.quantity;
+  document.getElementById('sellBid').textContent = bid;
+  document.getElementById('sellPnl').textContent = fmtINR(pnl);
+  document.getElementById('sellPnl').style.color = pnl >= 0 ? 'var(--up)' : 'var(--down)';
+}
+function closeSellModal() {
+  document.getElementById('sellModal').classList.add('hidden');
+  sellTarget = null;
+}
+
+async function executeSell() {
+  if (!session || !sellTarget) return;
+  const p     = priceMap[sellTarget.symbol] || {};
+  const price = p.bid || sellTarget.entry_price;
+  const total = price * sellTarget.quantity;
+  const pnl   = (price - sellTarget.entry_price) * sellTarget.quantity;
+  const newBalance = session.wallet + total;
+
+  await Promise.all([
+    api('deletePosition', { id: sellTarget.id }),
+    api('placeOrder', { mobile: session.mobile, symbol: sellTarget.symbol, side: 'SELL', quantity: sellTarget.quantity, price }),
+    api('updateWalletWithLedger', {
+      mobile: session.mobile, newBalance, type: 'CREDIT', amount: total,
+      narration: `SELL ${sellTarget.symbol} x${sellTarget.quantity} @ ${price}`
+    })
+  ]);
+
+  session.wallet = newBalance;
+  updateWalletDisplay();
+  positions = positions.filter(p => p.id !== sellTarget.id);
+  renderPositions();
+  closeSellModal();
+  alert(`✅ Sold! P&L: ${fmtINR(pnl)}`);
+  syncData();
+}
+
+// ── POSITIONS ─────────────────────────────────────────────────────────────────
+function renderPositions() {
+  const panel   = document.getElementById('positionsPanel');
+  const content = document.getElementById('positionsContent');
+  const pnlEl   = document.getElementById('totalPnL');
+  const list    = session?.isAdmin ? allPositions : positions;
+
+  if (!list.length) { panel.classList.add('hidden'); return; }
+  panel.classList.remove('hidden');
+
+  let total = 0;
+  const rows = list.map(pos => {
+    const p    = priceMap[pos.symbol] || {};
+    const bid  = p.bid || pos.entry_price;
+    const pnl  = (bid - pos.entry_price) * pos.quantity;
+    total += pnl;
+    const cls  = pnl >= 0 ? 'up' : 'down';
+    const sellBtn = (!session?.isAdmin && pos.mobile === session?.mobile)
+      ? `<button class="btn-danger-sm" onclick="openSellModal(${JSON.stringify(pos).replace(/"/g, '&quot;')})">Sell</button>`
+      : '';
+    return `<tr>
+      <td>${pos.symbol}${session?.isAdmin ? `<br/><span class="muted">${pos.mobile}</span>` : ''}</td>
+      <td>${pos.quantity}</td>
+      <td>${fmt(pos.entry_price)}</td>
+      <td>${bid}</td>
+      <td class="${cls}">${fmtINR(pnl)}</td>
+      <td>${sellBtn}</td>
+    </tr>`;
+  }).join('');
+
+  const totalCls = total >= 0 ? 'up' : 'down';
+  pnlEl.textContent = `Total P&L: ${fmtINR(total)}`;
+  pnlEl.className = 'pnl-badge ' + totalCls;
+
+  content.innerHTML = `<table class="inner-table">
+    <thead><tr><th>Symbol</th><th>Qty</th><th>Entry</th><th>LTP</th><th>P&L</th><th></th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
+// ── ORDER HISTORY ─────────────────────────────────────────────────────────────
+function renderHistory() {
+  const panel   = document.getElementById('historyPanel');
+  const content = document.getElementById('historyContent');
+  if (!orderHist.length) { panel.classList.add('hidden'); return; }
+  panel.classList.remove('hidden');
+
+  const rows = [...orderHist].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+    .map(o => `<tr>
+      <td class="muted">${toIST(o.created_at)}</td>
+      <td>${o.symbol}${session?.isAdmin ? `<br/><span class="muted">${o.mobile}</span>` : ''}</td>
+      <td class="${o.side === 'BUY' ? 'up' : 'down'}">${o.side}</td>
+      <td>${o.quantity}</td>
+      <td>${fmt(o.price)}</td>
+      <td>${fmtINR(o.quantity * o.price)}</td>
+    </tr>`).join('');
+
+  content.innerHTML = `<table class="inner-table">
+    <thead><tr><th>Time (IST)</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Price</th><th>Value</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
+// ── LEDGER ───────────────────────────────────────────────────────────────────
+function renderLedger() {
+  const panel   = document.getElementById('ledgerPanel');
+  const content = document.getElementById('ledgerContent');
+  const badge   = document.getElementById('ledgerBadge');
+  if (!ledgerData.length) { panel.classList.add('hidden'); return; }
+  panel.classList.remove('hidden');
+
+  if (!session?.isAdmin && ledgerData.length) {
+    const latest = [...ledgerData].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+    badge.textContent = 'Balance: ' + fmtINR(latest.balance_after);
+  } else {
+    badge.textContent = '';
+  }
+
+  const rows = [...ledgerData].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+    .map(e => `<tr>
+      <td class="muted">${toIST(e.created_at)}</td>
+      ${session?.isAdmin ? `<td class="muted">${e.mobile}</td>` : ''}
+      <td class="${e.type === 'CREDIT' ? 'up' : 'down'}">${e.type}</td>
+      <td>${fmtINR(e.amount)}</td>
+      <td class="accent">${fmtINR(e.balance_after)}</td>
+      <td class="muted">${e.narration || '-'}</td>
+    </tr>`).join('');
+
+  content.innerHTML = `<table class="inner-table">
+    <thead><tr>
+      <th>Time (IST)</th>
+      ${session?.isAdmin ? '<th>Mobile</th>' : ''}
+      <th>Type</th><th>Amount</th><th>Balance After</th><th>Note</th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
+// ── ADMIN ─────────────────────────────────────────────────────────────────────
+function toggleAdminPanel() {
+  document.getElementById('adminPanel').classList.toggle('hidden');
+}
+
+function renderAdminUsers() {
+  const tbody = document.getElementById('userTableBody');
+  tbody.innerHTML = allUsers.map(u => `<tr>
+    <td class="mono">${u.mobile}</td>
+    <td class="muted mono">${u.password}</td>
+    <td class="up">${fmtINR(u.wallet_balance)}</td>
+    <td>
+      <div style="display:flex;gap:6px">
+        <button class="btn-sm btn-primary" onclick="adminEditWallet('${u.mobile}',${u.wallet_balance})">Wallet</button>
+        <button class="btn-sm btn-ghost" onclick="adminResetPwd('${u.mobile}')">Reset Pwd</button>
+      </div>
+    </td>
+  </tr>`).join('');
+  document.getElementById('adminPanel').classList.remove('hidden');
+}
+
+async function adminEditWallet(mobile, current) {
+  const val = prompt(`New wallet balance for ${mobile}:`, current);
+  if (val === null || isNaN(val)) return;
+  const newBalance = parseFloat(val);
+  const diff = newBalance - current;
+  await api('updateWalletWithLedger', {
+    mobile, newBalance, type: diff >= 0 ? 'CREDIT' : 'DEBIT',
+    amount: Math.abs(diff), narration: 'Admin adjustment'
+  });
+  alert('✅ Wallet updated');
+  syncData();
+}
+
+async function adminResetPwd(mobile) {
+  const pwd = prompt(`New password for ${mobile}:`);
+  if (!pwd) return;
+  await api('updateProfile', { mobile, data: { password: pwd } });
+  alert('✅ Password updated');
+  syncData();
+}
+
+// ── CREATE USER ───────────────────────────────────────────────────────────────
+function openCreateUserModal()  { document.getElementById('createUserModal').classList.remove('hidden'); }
+function closeCreateUserModal() { document.getElementById('createUserModal').classList.add('hidden'); }
+
+async function executeCreateUser() {
+  const mobile  = document.getElementById('newUserMobile').value.trim();
+  const password = document.getElementById('newUserPassword').value.trim();
+  const wallet  = parseFloat(document.getElementById('newUserWallet').value);
+  if (!/^\d{10}$/.test(mobile)) return alert('Enter a valid 10-digit mobile number.');
+  if (!password) return alert('Enter a password.');
+  const res = await api('createUser', { mobile, password, wallet_balance: wallet });
+  if (res.error) return alert('❌ ' + JSON.stringify(res.error));
+  alert('✅ User created: ' + mobile);
+  closeCreateUserModal();
+  syncData();
+}
+
+// ── JV ENTRY ──────────────────────────────────────────────────────────────────
+function openJVModal() {
+  if (!session) return;
+  document.getElementById('jvTitle').textContent = session.isAdmin ? 'JV Entry' : 'Wallet Adjustment';
+  document.getElementById('jvAdminFields').style.display = session.isAdmin ? '' : 'none';
+  document.getElementById('jvMobile').value = '';
+  document.getElementById('jvAmount').value = '';
+  document.getElementById('jvNarration').value = '';
+  jvType = 'CREDIT';
+  document.getElementById('jvCreditBtn').classList.add('active');
+  document.getElementById('jvDebitBtn').classList.remove('active');
+  document.getElementById('jvModal').classList.remove('hidden');
+}
+function closeJVModal() { document.getElementById('jvModal').classList.add('hidden'); }
+function setJVType(type) {
+  jvType = type;
+  document.getElementById('jvCreditBtn').classList.toggle('active', type === 'CREDIT');
+  document.getElementById('jvDebitBtn').classList.toggle('active', type === 'DEBIT');
+}
+
+async function executeJV() {
+  const mobile   = session.isAdmin ? document.getElementById('jvMobile').value.trim() : session.mobile;
+  const amount   = parseFloat(document.getElementById('jvAmount').value);
+  const narration = document.getElementById('jvNarration').value.trim() || 'Manual adjustment';
+  if (session.isAdmin && !/^\d{10}$/.test(mobile)) return alert('Enter a valid mobile number.');
+  if (!amount || amount <= 0) return alert('Enter a valid amount.');
+  const res = await api('addJVEntry', { mobile, type: jvType, amount, narration });
+  if (res.error) return alert('❌ ' + JSON.stringify(res.error));
+  alert('✅ Entry saved');
+  closeJVModal();
+  syncData();
+}
+
+// ── SYNC ──────────────────────────────────────────────────────────────────────
+function hidePanel(id) { document.getElementById(id).classList.add('hidden'); }
+
+async function syncData() {
+  if (!session) return;
+  const m = session.mobile;
+
+  if (session.isAdmin) {
+    const [posRes, ordRes, ledRes, usrRes] = await Promise.all([
+      api('getAllPositions'),
+      api('getAllOrders'),
+      api('getAllLedger'),
+      api('getAllProfiles')
+    ]);
+    allPositions = posRes.data || [];
+    orderHist    = ordRes.data  || [];
+    ledgerData   = ledRes.data  || [];
+    allUsers     = usrRes.data  || [];
+    renderPositions();
+    renderHistory();
+    renderLedger();
+    renderAdminUsers();
+  } else {
+    const [posRes, ordRes, ledRes, profRes] = await Promise.all([
+      api('getPositions', { mobile: m }),
+      api('getOrders',    { mobile: m }),
+      api('getAllLedger', { mobile: m }),
+      api('getProfile',   { mobile: m })
+    ]);
+    positions  = posRes.data  || [];
+    orderHist  = ordRes.data  || [];
+    ledgerData = (ledRes.data || []).filter(e => e.mobile === m);
+    if (profRes.data) {
+      session.wallet = parseFloat(profRes.data.wallet_balance);
+      updateWalletDisplay();
+    }
+    renderPositions();
+    renderHistory();
+    renderLedger();
+  }
+}
+
+// ── BOOT ─────────────────────────────────────────────────────────────────────
+(async () => {
+  // check existing session
+  const saved = localStorage.getItem('session');
+  if (saved) {
+    try { session = JSON.parse(saved); } catch { session = null; }
+  }
+
+  if (session) {
+    document.getElementById('loginOverlay').style.display = 'none';
+    bootDashboard();
+  }
+
+  // always start the price feed regardless of login state
+  await loadInitialPrices();
+  subscribePrices();
+})();
