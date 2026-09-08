@@ -75,7 +75,7 @@ function logout() {
   session = null;
   document.getElementById('loginOverlay').classList.remove('hidden');
   document.getElementById('loginOverlay').style.display = 'flex';
-  document.getElementById('walletChip').style.display = 'none';
+  document.getElementById('userMobileDisplay').style.display = 'none';
   document.getElementById('adminBtn').style.display = 'none';
   document.getElementById('actionHeader').style.display = 'none';
   document.querySelectorAll('.trade-cell').forEach(el => el.style.display = 'none');
@@ -88,6 +88,10 @@ function logout() {
 function bootDashboard() {
   document.getElementById('loginOverlay').style.display = 'none';
   updateWalletDisplay();
+
+  const mobileEl = document.getElementById('userMobileDisplay');
+  mobileEl.textContent = session.mobile;
+  mobileEl.style.display = '';
 
   if (session.isAdmin) {
     document.getElementById('adminBtn').style.display = '';
@@ -561,7 +565,18 @@ async function syncData() {
 
 // ── BOOT ─────────────────────────────────────────────────────────────────────
 (async () => {
-  // check existing session
+  // Guard: catch obvious placeholder config early so the error is visible
+  if (SUPABASE_URL.includes('YOUR_PROJECT_ID') || SUPABASE_ANON_KEY.includes('YOUR_ANON')) {
+    setStatus('down', 'config missing');
+    console.error('Fill in SUPABASE_URL and SUPABASE_ANON_KEY in script.js');
+    return;
+  }
+
+  // Always start the price feed — visible to everyone, login or not
+  await loadInitialPrices();
+  subscribePrices();
+
+  // Restore session if one exists
   const saved = localStorage.getItem('session');
   if (saved) {
     try { session = JSON.parse(saved); } catch { session = null; }
@@ -571,8 +586,4 @@ async function syncData() {
     document.getElementById('loginOverlay').style.display = 'none';
     bootDashboard();
   }
-
-  // always start the price feed regardless of login state
-  await loadInitialPrices();
-  subscribePrices();
 })();
