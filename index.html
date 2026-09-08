@@ -51,16 +51,15 @@
         <th>Bid</th>
         <th>Ask</th>
         <th>Chart</th>
-        <th id="actionHeader" style="display:none">Trade</th>
       </tr>
     </thead>
     <tbody id="commodityRows">
-      <tr><td colspan="5" class="group-heading">Commodities</td></tr>
-      <tr><td colspan="5" class="empty">Waiting for price feed…</td></tr>
+      <tr><td colspan="4" class="group-heading">Commodities</td></tr>
+      <tr><td colspan="4" class="empty">Waiting for price feed…</td></tr>
     </tbody>
     <tbody id="forexRows">
-      <tr><td colspan="5" class="group-heading">Forex</td></tr>
-      <tr><td colspan="5" class="empty">Waiting for price feed…</td></tr>
+      <tr><td colspan="4" class="group-heading">Forex</td></tr>
+      <tr><td colspan="4" class="empty">Waiting for price feed…</td></tr>
     </tbody>
   </table>
 
@@ -122,7 +121,10 @@
       <span>Buy <span id="buySymbol"></span></span>
       <button class="modal-close" onclick="closeBuyModal()">✕</button>
     </div>
-    <div class="modal-row"><span>Live Ask</span><strong id="buyAsk">--</strong></div>
+    <div class="live-price-ticker">
+      <span class="ticker-label">Live Ask</span>
+      <span id="buyLiveAsk" class="ticker-price">--</span>
+    </div>
     <label>Quantity (units)</label>
     <input id="buyQty" type="number" value="1" min="1" />
     <div class="modal-row cost-row">
@@ -143,15 +145,18 @@
       <span>Close Position: <span id="sellSymbol"></span></span>
       <button class="modal-close" onclick="closeSellModal()">✕</button>
     </div>
+    <div class="live-price-ticker">
+      <span class="ticker-label">Live Bid</span>
+      <span id="sellLiveBid" class="ticker-price">--</span>
+    </div>
     <div class="modal-row"><span>Entry Price</span><strong id="sellEntry">--</strong></div>
-    <div class="modal-row"><span>Live Bid</span><strong id="sellBid">--</strong></div>
     <div class="modal-row"><span>Quantity</span><strong id="sellQty">--</strong></div>
     <div class="modal-row cost-row">
       <span>Est. P&amp;L</span>
       <strong id="sellPnl">--</strong>
     </div>
     <div class="modal-actions">
-      <button class="btn-danger" onclick="executeSell()">CONFIRM SELL</button>
+      <button class="btn-danger-full" onclick="executeSell()">CONFIRM SELL</button>
       <button class="btn-ghost2" onclick="closeSellModal()">Cancel</button>
     </div>
   </div>
