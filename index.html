@@ -1,577 +1,211 @@
-// ── CONFIG ──────────────────────────────────────────────────────────────────
-const SUPABASE_URL      = "https://YOUR_PROJECT_ID.supabase.co";
-const SUPABASE_ANON_KEY = "YOUR_ANON_PUBLIC_KEY";
-// ─────────────────────────────────────────────────────────────────────────────
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Live Forex Rates</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
 
-const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+<!-- ═══════════════════════════════════════════════════════════ LOGIN OVERLAY -->
+<div id="loginOverlay" class="overlay">
+  <div class="login-box">
+    <div class="login-logo">FX</div>
+    <h2>Welcome</h2>
+    <p class="login-sub">Enter your credentials to access the dashboard</p>
+    <input id="loginMobile" type="tel" placeholder="Mobile Number" maxlength="10" />
+    <input id="loginPassword" type="password" placeholder="Password" />
+    <button id="loginBtn" onclick="handleLogin()">ACCESS DASHBOARD</button>
+    <p id="loginError" class="login-error"></p>
+  </div>
+</div>
 
-// ── STATE ────────────────────────────────────────────────────────────────────
-let session     = null;   // { mobile, isAdmin, wallet }
-let priceMap    = {};     // { symbol: { bid, ask } }
-let positions   = [];     // array of position objects from DB
-let orderHist   = [];
-let ledgerData  = [];
-let allUsers    = [];
-let allPositions = [];
-let buyTarget   = null;   // { symbol, ask }
-let sellTarget  = null;   // position object
-let jvType      = 'CREDIT';
-let widgetCtr   = 0;
-
-const COMMODITY_SYMBOLS = ['XAUUSD', 'XAGUSD', 'XBRUSD'];
-const COMMODITY_LABELS  = { XAUUSD: 'Gold', XAGUSD: 'Silver', XBRUSD: 'Crude' };
-const TV_SYMBOLS        = { XAUUSD: 'OANDA:XAUUSD', XAGUSD: 'OANDA:XAGUSD', XBRUSD: 'TVC:UKOIL' };
-const rowRegistry       = new Map(); // symbol → { tr, bidCell, askCell, lastBid, lastAsk, chartRow, chartOpen }
-
-// ── API HELPER ───────────────────────────────────────────────────────────────
-async function api(action, payload = {}) {
-  const res = await fetch('/api/supabase', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action, payload })
-  });
-  return res.json();
-}
-
-// ── UTILS ────────────────────────────────────────────────────────────────────
-function fmt(n, d = 2) { return parseFloat(n).toFixed(d); }
-function fmtINR(n) { return '₹' + parseFloat(n).toLocaleString('en-IN', { minimumFractionDigits: 2 }); }
-function toIST(ts) {
-  return new Date(ts).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false });
-}
-function setStatus(state, label) {
-  document.getElementById('statusDot').className = 'dot' + (state ? ' ' + state : '');
-  document.getElementById('statusText').textContent = label;
-}
-
-// ── LOGIN ────────────────────────────────────────────────────────────────────
-async function handleLogin() {
-  const mobile   = document.getElementById('loginMobile').value.trim();
-  const password = document.getElementById('loginPassword').value;
-  const errEl    = document.getElementById('loginError');
-  const btn      = document.getElementById('loginBtn');
-  errEl.textContent = '';
-
-  if (!/^\d{10}$/.test(mobile)) { errEl.textContent = 'Enter a valid 10-digit mobile number.'; return; }
-  if (!password) { errEl.textContent = 'Enter your password.'; return; }
-
-  btn.textContent = 'CONNECTING…';
-  btn.disabled = true;
-
-  const res = await api('login', { mobile, password });
-  btn.textContent = 'ACCESS DASHBOARD';
-  btn.disabled = false;
-
-  if (res.error) { errEl.textContent = res.error === 'Incorrect Password' ? '❌ Incorrect password.' : '❌ ' + res.error; return; }
-
-  session = { mobile: res.data.mobile, isAdmin: res.data.is_admin, wallet: parseFloat(res.data.wallet_balance) };
-  localStorage.setItem('session', JSON.stringify(session));
-  bootDashboard();
-}
-
-function logout() {
-  localStorage.removeItem('session');
-  session = null;
-  document.getElementById('loginOverlay').classList.remove('hidden');
-  document.getElementById('loginOverlay').style.display = 'flex';
-  document.getElementById('walletChip').style.display = 'none';
-  document.getElementById('adminBtn').style.display = 'none';
-  document.getElementById('actionHeader').style.display = 'none';
-  document.querySelectorAll('.trade-cell').forEach(el => el.style.display = 'none');
-  hidePanel('positionsPanel');
-  hidePanel('historyPanel');
-  hidePanel('ledgerPanel');
-  hidePanel('adminPanel');
-}
-
-function bootDashboard() {
-  document.getElementById('loginOverlay').style.display = 'none';
-  updateWalletDisplay();
-
-  if (session.isAdmin) {
-    document.getElementById('adminBtn').style.display = '';
-    document.getElementById('ledgerTitle').textContent = 'Client Ledger';
-  }
-
-  // show Trade column
-  document.getElementById('actionHeader').style.display = '';
-  document.querySelectorAll('.trade-cell').forEach(el => el.style.display = '');
-
-  syncData();
-  setInterval(syncData, 10000);
-}
-
-// ── WALLET ───────────────────────────────────────────────────────────────────
-function updateWalletDisplay() {
-  document.getElementById('walletChip').style.display = '';
-  document.getElementById('walletAmt').textContent =
-    session.wallet.toLocaleString('en-IN', { minimumFractionDigits: 2 });
-}
-
-// ── PRICE FEED (Supabase Realtime) ───────────────────────────────────────────
-async function loadInitialPrices() {
-  const { data } = await sb.from('live_prices').select('*');
-  if (data) data.forEach(r => updatePrice(r.symbol, r.bid, r.ask));
-}
-
-function subscribePrices() {
-  sb.channel('live_prices_changes')
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'live_prices' }, p => {
-      const r = p.new;
-      if (r?.symbol) updatePrice(r.symbol, r.bid, r.ask);
-    })
-    .subscribe(s => {
-      if (s === 'SUBSCRIBED') setStatus('live', 'live');
-      else if (s === 'CHANNEL_ERROR' || s === 'TIMED_OUT') setStatus('down', 'disconnected — retrying…');
-    });
-}
-
-function updatePrice(symbol, bid, ask) {
-  priceMap[symbol] = { bid, ask };
-  document.getElementById('asOf').textContent = 'as of ' + new Date().toLocaleTimeString();
-  upsertRow(symbol, bid, ask);
-  // refresh open sell modal if it's for this symbol
-  if (sellTarget?.symbol === symbol) refreshSellModal();
-}
-
-// ── ROW RENDERING ─────────────────────────────────────────────────────────────
-function tvSymbol(sym) { return TV_SYMBOLS[sym] || 'OANDA:' + sym; }
-
-function upsertRow(symbol, bid, ask) {
-  const isCommodity = COMMODITY_SYMBOLS.includes(symbol);
-  const tbody = document.getElementById(isCommodity ? 'commodityRows' : 'forexRows');
-  const label = COMMODITY_LABELS[symbol];
-
-  let entry = rowRegistry.get(symbol);
-  if (!entry) {
-    // clear placeholder
-    const empty = tbody.querySelector('.empty');
-    if (empty) empty.closest('tr').remove();
-
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td>
-        ${symbol}
-        ${label ? `<span class="symbol-sub">${label}</span>` : ''}
-      </td>
-      <td class="price"></td>
-      <td class="price"></td>
-      <td><button class="chart-toggle" onclick="toggleChart('${symbol}')">Chart ▾</button></td>
-      <td class="trade-cell" style="${session ? '' : 'display:none'}">
-        <button class="btn-buy" onclick="openBuyModal('${symbol}')">Buy</button>
-      </td>`;
-    tbody.appendChild(tr);
-
-    entry = {
-      tr,
-      bidCell: tr.children[1],
-      askCell: tr.children[2],
-      lastBid: null, lastAsk: null,
-      chartRow: null, chartOpen: false
-    };
-    rowRegistry.set(symbol, entry);
-  }
-
-  flashCell(entry.bidCell, bid, entry.lastBid);
-  flashCell(entry.askCell, ask, entry.lastAsk);
-  entry.lastBid = bid;
-  entry.lastAsk = ask;
-}
-
-function flashCell(cell, newVal, oldVal) {
-  cell.textContent = newVal;
-  cell.classList.remove('flash-up', 'flash-down');
-  if (oldVal !== null) {
-    if (newVal > oldVal) cell.classList.add('flash-up');
-    else if (newVal < oldVal) cell.classList.add('flash-down');
-    void cell.offsetWidth;
-  }
-  setTimeout(() => cell.classList.remove('flash-up', 'flash-down'), 700);
-}
-
-// ── CHART ────────────────────────────────────────────────────────────────────
-function toggleChart(symbol) {
-  const entry = rowRegistry.get(symbol);
-  if (!entry) return;
-  const btn = entry.tr.querySelector('.chart-toggle');
-
-  if (entry.chartOpen) {
-    entry.chartRow?.remove();
-    entry.chartRow = null;
-    entry.chartOpen = false;
-    btn.textContent = 'Chart ▾';
-    return;
-  }
-
-  const chartRow = document.createElement('tr');
-  chartRow.className = 'chart-row';
-  const td = document.createElement('td');
-  td.colSpan = 5;
-  const id = 'tv_' + (widgetCtr++);
-  const div = document.createElement('div');
-  div.id = id;
-  div.className = 'tradingview-widget-container';
-  td.appendChild(div);
-  chartRow.appendChild(td);
-  entry.tr.insertAdjacentElement('afterend', chartRow);
-  entry.chartRow = chartRow;
-  entry.chartOpen = true;
-  btn.textContent = 'Hide chart ▴';
-
-  new TradingView.widget({
-    autosize: true, symbol: tvSymbol(symbol), interval: '15',
-    timezone: 'Asia/Kolkata', theme: 'dark', style: '1', locale: 'en',
-    toolbar_bg: '#11161f', enable_publishing: false, save_image: false,
-    container_id: id
-  });
-}
-
-// ── BUY ──────────────────────────────────────────────────────────────────────
-function openBuyModal(symbol) {
-  if (!session) return;
-  const p = priceMap[symbol];
-  if (!p) return alert('No price available yet for ' + symbol);
-  buyTarget = { symbol, ask: p.ask };
-  document.getElementById('buySymbol').textContent = symbol;
-  document.getElementById('buyAsk').textContent = p.ask;
-  document.getElementById('buyQty').value = 1;
-  calcBuyCost();
-  document.getElementById('buyModal').classList.remove('hidden');
-}
-function closeBuyModal() {
-  document.getElementById('buyModal').classList.add('hidden');
-  buyTarget = null;
-}
-function calcBuyCost() {
-  const qty = parseFloat(document.getElementById('buyQty').value) || 0;
-  document.getElementById('buyCost').textContent = fmtINR(qty * (buyTarget?.ask || 0));
-}
-document.getElementById('buyQty').addEventListener('input', calcBuyCost);
-
-async function executeBuy() {
-  if (!session || !buyTarget) return;
-  const qty   = parseFloat(document.getElementById('buyQty').value);
-  const price = buyTarget.ask;
-  const cost  = qty * price;
-  if (qty <= 0) return alert('Enter a valid quantity.');
-  if (cost > session.wallet) return alert('❌ Insufficient wallet balance.');
-
-  const newBalance = session.wallet - cost;
-
-  const [posRes, , walRes] = await Promise.all([
-    api('addPosition', { mobile: session.mobile, symbol: buyTarget.symbol, side: 'BUY', quantity: qty, entry_price: price }),
-    api('placeOrder',  { mobile: session.mobile, symbol: buyTarget.symbol, side: 'BUY', quantity: qty, price }),
-    api('updateWalletWithLedger', {
-      mobile: session.mobile, newBalance, type: 'DEBIT', amount: cost,
-      narration: `BUY ${buyTarget.symbol} x${qty} @ ${price}`
-    })
-  ]);
-
-  if (posRes.error) return alert('❌ Order failed: ' + JSON.stringify(posRes.error));
-  session.wallet = newBalance;
-  updateWalletDisplay();
-  positions.push(posRes.data);
-  renderPositions();
-  closeBuyModal();
-  alert(`✅ Bought ${qty} × ${buyTarget.symbol} @ ${price}`);
-  syncData();
-}
-
-// ── SELL ─────────────────────────────────────────────────────────────────────
-function openSellModal(pos) {
-  sellTarget = pos;
-  const p = priceMap[pos.symbol] || {};
-  document.getElementById('sellSymbol').textContent = pos.symbol;
-  document.getElementById('sellEntry').textContent  = fmt(pos.entry_price);
-  document.getElementById('sellQty').textContent    = pos.quantity;
-  refreshSellModal();
-  document.getElementById('sellModal').classList.remove('hidden');
-}
-function refreshSellModal() {
-  const p = priceMap[sellTarget?.symbol] || {};
-  const bid = p.bid || sellTarget?.entry_price || 0;
-  const pnl = (bid - sellTarget.entry_price) * sellTarget.quantity;
-  document.getElementById('sellBid').textContent = bid;
-  document.getElementById('sellPnl').textContent = fmtINR(pnl);
-  document.getElementById('sellPnl').style.color = pnl >= 0 ? 'var(--up)' : 'var(--down)';
-}
-function closeSellModal() {
-  document.getElementById('sellModal').classList.add('hidden');
-  sellTarget = null;
-}
-
-async function executeSell() {
-  if (!session || !sellTarget) return;
-  const p     = priceMap[sellTarget.symbol] || {};
-  const price = p.bid || sellTarget.entry_price;
-  const total = price * sellTarget.quantity;
-  const pnl   = (price - sellTarget.entry_price) * sellTarget.quantity;
-  const newBalance = session.wallet + total;
-
-  await Promise.all([
-    api('deletePosition', { id: sellTarget.id }),
-    api('placeOrder', { mobile: session.mobile, symbol: sellTarget.symbol, side: 'SELL', quantity: sellTarget.quantity, price }),
-    api('updateWalletWithLedger', {
-      mobile: session.mobile, newBalance, type: 'CREDIT', amount: total,
-      narration: `SELL ${sellTarget.symbol} x${sellTarget.quantity} @ ${price}`
-    })
-  ]);
-
-  session.wallet = newBalance;
-  updateWalletDisplay();
-  positions = positions.filter(p => p.id !== sellTarget.id);
-  renderPositions();
-  closeSellModal();
-  alert(`✅ Sold! P&L: ${fmtINR(pnl)}`);
-  syncData();
-}
-
-// ── POSITIONS ─────────────────────────────────────────────────────────────────
-function renderPositions() {
-  const panel   = document.getElementById('positionsPanel');
-  const content = document.getElementById('positionsContent');
-  const pnlEl   = document.getElementById('totalPnL');
-  const list    = session?.isAdmin ? allPositions : positions;
-
-  if (!list.length) { panel.classList.add('hidden'); return; }
-  panel.classList.remove('hidden');
-
-  let total = 0;
-  const rows = list.map(pos => {
-    const p    = priceMap[pos.symbol] || {};
-    const bid  = p.bid || pos.entry_price;
-    const pnl  = (bid - pos.entry_price) * pos.quantity;
-    total += pnl;
-    const cls  = pnl >= 0 ? 'up' : 'down';
-    const sellBtn = (!session?.isAdmin && pos.mobile === session?.mobile)
-      ? `<button class="btn-danger-sm" onclick="openSellModal(${JSON.stringify(pos).replace(/"/g, '&quot;')})">Sell</button>`
-      : '';
-    return `<tr>
-      <td>${pos.symbol}${session?.isAdmin ? `<br/><span class="muted">${pos.mobile}</span>` : ''}</td>
-      <td>${pos.quantity}</td>
-      <td>${fmt(pos.entry_price)}</td>
-      <td>${bid}</td>
-      <td class="${cls}">${fmtINR(pnl)}</td>
-      <td>${sellBtn}</td>
-    </tr>`;
-  }).join('');
-
-  const totalCls = total >= 0 ? 'up' : 'down';
-  pnlEl.textContent = `Total P&L: ${fmtINR(total)}`;
-  pnlEl.className = 'pnl-badge ' + totalCls;
-
-  content.innerHTML = `<table class="inner-table">
-    <thead><tr><th>Symbol</th><th>Qty</th><th>Entry</th><th>LTP</th><th>P&L</th><th></th></tr></thead>
-    <tbody>${rows}</tbody>
-  </table>`;
-}
-
-// ── ORDER HISTORY ─────────────────────────────────────────────────────────────
-function renderHistory() {
-  const panel   = document.getElementById('historyPanel');
-  const content = document.getElementById('historyContent');
-  if (!orderHist.length) { panel.classList.add('hidden'); return; }
-  panel.classList.remove('hidden');
-
-  const rows = [...orderHist].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
-    .map(o => `<tr>
-      <td class="muted">${toIST(o.created_at)}</td>
-      <td>${o.symbol}${session?.isAdmin ? `<br/><span class="muted">${o.mobile}</span>` : ''}</td>
-      <td class="${o.side === 'BUY' ? 'up' : 'down'}">${o.side}</td>
-      <td>${o.quantity}</td>
-      <td>${fmt(o.price)}</td>
-      <td>${fmtINR(o.quantity * o.price)}</td>
-    </tr>`).join('');
-
-  content.innerHTML = `<table class="inner-table">
-    <thead><tr><th>Time (IST)</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Price</th><th>Value</th></tr></thead>
-    <tbody>${rows}</tbody>
-  </table>`;
-}
-
-// ── LEDGER ───────────────────────────────────────────────────────────────────
-function renderLedger() {
-  const panel   = document.getElementById('ledgerPanel');
-  const content = document.getElementById('ledgerContent');
-  const badge   = document.getElementById('ledgerBadge');
-  if (!ledgerData.length) { panel.classList.add('hidden'); return; }
-  panel.classList.remove('hidden');
-
-  if (!session?.isAdmin && ledgerData.length) {
-    const latest = [...ledgerData].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
-    badge.textContent = 'Balance: ' + fmtINR(latest.balance_after);
-  } else {
-    badge.textContent = '';
-  }
-
-  const rows = [...ledgerData].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
-    .map(e => `<tr>
-      <td class="muted">${toIST(e.created_at)}</td>
-      ${session?.isAdmin ? `<td class="muted">${e.mobile}</td>` : ''}
-      <td class="${e.type === 'CREDIT' ? 'up' : 'down'}">${e.type}</td>
-      <td>${fmtINR(e.amount)}</td>
-      <td class="accent">${fmtINR(e.balance_after)}</td>
-      <td class="muted">${e.narration || '-'}</td>
-    </tr>`).join('');
-
-  content.innerHTML = `<table class="inner-table">
-    <thead><tr>
-      <th>Time (IST)</th>
-      ${session?.isAdmin ? '<th>Mobile</th>' : ''}
-      <th>Type</th><th>Amount</th><th>Balance After</th><th>Note</th>
-    </tr></thead>
-    <tbody>${rows}</tbody>
-  </table>`;
-}
-
-// ── ADMIN ─────────────────────────────────────────────────────────────────────
-function toggleAdminPanel() {
-  document.getElementById('adminPanel').classList.toggle('hidden');
-}
-
-function renderAdminUsers() {
-  const tbody = document.getElementById('userTableBody');
-  tbody.innerHTML = allUsers.map(u => `<tr>
-    <td class="mono">${u.mobile}</td>
-    <td class="muted mono">${u.password}</td>
-    <td class="up">${fmtINR(u.wallet_balance)}</td>
-    <td>
-      <div style="display:flex;gap:6px">
-        <button class="btn-sm btn-primary" onclick="adminEditWallet('${u.mobile}',${u.wallet_balance})">Wallet</button>
-        <button class="btn-sm btn-ghost" onclick="adminResetPwd('${u.mobile}')">Reset Pwd</button>
+<!-- ═══════════════════════════════════════════════════════════ MAIN DASHBOARD -->
+<header class="site-header">
+  <div class="wrap header-inner">
+    <span class="mark">FX</span>
+    <span class="tagline">Live rates · streamed from MT4</span>
+    <div class="header-right">
+      <div class="wallet-chip" onclick="openJVModal()" id="walletChip" style="display:none">
+        <span class="wallet-label">Wallet</span>
+        <span class="wallet-val">₹<span id="walletAmt">0</span></span>
       </div>
-    </td>
-  </tr>`).join('');
-  document.getElementById('adminPanel').classList.remove('hidden');
-}
+      <span class="dot" id="statusDot"></span>
+      <span id="statusText" class="status-txt">connecting…</span>
+      <span class="asof" id="asOf"></span>
+      <button class="btn-sm btn-ghost" id="adminBtn" style="display:none" onclick="toggleAdminPanel()">Admin</button>
+      <button class="btn-sm btn-danger" onclick="logout()">Logout</button>
+    </div>
+  </div>
+</header>
 
-async function adminEditWallet(mobile, current) {
-  const val = prompt(`New wallet balance for ${mobile}:`, current);
-  if (val === null || isNaN(val)) return;
-  const newBalance = parseFloat(val);
-  const diff = newBalance - current;
-  await api('updateWalletWithLedger', {
-    mobile, newBalance, type: diff >= 0 ? 'CREDIT' : 'DEBIT',
-    amount: Math.abs(diff), narration: 'Admin adjustment'
-  });
-  alert('✅ Wallet updated');
-  syncData();
-}
+<main class="wrap">
 
-async function adminResetPwd(mobile) {
-  const pwd = prompt(`New password for ${mobile}:`);
-  if (!pwd) return;
-  await api('updateProfile', { mobile, data: { password: pwd } });
-  alert('✅ Password updated');
-  syncData();
-}
+  <!-- ── PRICE TABLE ──────────────────────────────────────────────────────── -->
+  <table class="price-table">
+    <thead>
+      <tr>
+        <th>Pair</th>
+        <th>Bid</th>
+        <th>Ask</th>
+        <th>Chart</th>
+        <th id="actionHeader" style="display:none">Trade</th>
+      </tr>
+    </thead>
+    <tbody id="commodityRows">
+      <tr><td colspan="5" class="group-heading">Commodities</td></tr>
+      <tr><td colspan="5" class="empty">Waiting for price feed…</td></tr>
+    </tbody>
+    <tbody id="forexRows">
+      <tr><td colspan="5" class="group-heading">Forex</td></tr>
+      <tr><td colspan="5" class="empty">Waiting for price feed…</td></tr>
+    </tbody>
+  </table>
 
-// ── CREATE USER ───────────────────────────────────────────────────────────────
-function openCreateUserModal()  { document.getElementById('createUserModal').classList.remove('hidden'); }
-function closeCreateUserModal() { document.getElementById('createUserModal').classList.add('hidden'); }
+  <p class="note">Rates update in real time from a live MetaTrader 4 terminal. For reference only — not an offer to trade.</p>
 
-async function executeCreateUser() {
-  const mobile  = document.getElementById('newUserMobile').value.trim();
-  const password = document.getElementById('newUserPassword').value.trim();
-  const wallet  = parseFloat(document.getElementById('newUserWallet').value);
-  if (!/^\d{10}$/.test(mobile)) return alert('Enter a valid 10-digit mobile number.');
-  if (!password) return alert('Enter a password.');
-  const res = await api('createUser', { mobile, password, wallet_balance: wallet });
-  if (res.error) return alert('❌ ' + JSON.stringify(res.error));
-  alert('✅ User created: ' + mobile);
-  closeCreateUserModal();
-  syncData();
-}
+  <!-- ── POSITIONS ────────────────────────────────────────────────────────── -->
+  <div id="positionsPanel" class="panel hidden">
+    <div class="panel-header">
+      <span>My Positions</span>
+      <span id="totalPnL" class="pnl-badge"></span>
+    </div>
+    <div class="panel-body" id="positionsContent"></div>
+  </div>
 
-// ── JV ENTRY ──────────────────────────────────────────────────────────────────
-function openJVModal() {
-  if (!session) return;
-  document.getElementById('jvTitle').textContent = session.isAdmin ? 'JV Entry' : 'Wallet Adjustment';
-  document.getElementById('jvAdminFields').style.display = session.isAdmin ? '' : 'none';
-  document.getElementById('jvMobile').value = '';
-  document.getElementById('jvAmount').value = '';
-  document.getElementById('jvNarration').value = '';
-  jvType = 'CREDIT';
-  document.getElementById('jvCreditBtn').classList.add('active');
-  document.getElementById('jvDebitBtn').classList.remove('active');
-  document.getElementById('jvModal').classList.remove('hidden');
-}
-function closeJVModal() { document.getElementById('jvModal').classList.add('hidden'); }
-function setJVType(type) {
-  jvType = type;
-  document.getElementById('jvCreditBtn').classList.toggle('active', type === 'CREDIT');
-  document.getElementById('jvDebitBtn').classList.toggle('active', type === 'DEBIT');
-}
+  <!-- ── ORDER HISTORY ────────────────────────────────────────────────────── -->
+  <div id="historyPanel" class="panel hidden">
+    <div class="panel-header">Order History</div>
+    <div class="panel-body" id="historyContent"></div>
+  </div>
 
-async function executeJV() {
-  const mobile   = session.isAdmin ? document.getElementById('jvMobile').value.trim() : session.mobile;
-  const amount   = parseFloat(document.getElementById('jvAmount').value);
-  const narration = document.getElementById('jvNarration').value.trim() || 'Manual adjustment';
-  if (session.isAdmin && !/^\d{10}$/.test(mobile)) return alert('Enter a valid mobile number.');
-  if (!amount || amount <= 0) return alert('Enter a valid amount.');
-  const res = await api('addJVEntry', { mobile, type: jvType, amount, narration });
-  if (res.error) return alert('❌ ' + JSON.stringify(res.error));
-  alert('✅ Entry saved');
-  closeJVModal();
-  syncData();
-}
+  <!-- ── LEDGER ───────────────────────────────────────────────────────────── -->
+  <div id="ledgerPanel" class="panel hidden">
+    <div class="panel-header">
+      <span id="ledgerTitle">My Ledger</span>
+      <span id="ledgerBadge" class="badge-purple"></span>
+    </div>
+    <div class="panel-body" id="ledgerContent"></div>
+  </div>
 
-// ── SYNC ──────────────────────────────────────────────────────────────────────
-function hidePanel(id) { document.getElementById(id).classList.add('hidden'); }
+  <!-- ── ADMIN PANEL ──────────────────────────────────────────────────────── -->
+  <div id="adminPanel" class="panel hidden">
+    <div class="panel-header">
+      <span>User Management</span>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="btn-sm btn-purple" onclick="openJVModal()">+ JV Entry</button>
+        <button class="btn-sm btn-primary" onclick="openCreateUserModal()">+ New User</button>
+      </div>
+    </div>
+    <div class="panel-body">
+      <table class="inner-table" id="userTable">
+        <thead><tr>
+          <th>Mobile</th><th>Password</th><th>Wallet</th><th>Actions</th>
+        </tr></thead>
+        <tbody id="userTableBody"></tbody>
+      </table>
+    </div>
+  </div>
 
-async function syncData() {
-  if (!session) return;
-  const m = session.mobile;
+</main>
 
-  if (session.isAdmin) {
-    const [posRes, ordRes, ledRes, usrRes] = await Promise.all([
-      api('getAllPositions'),
-      api('getAllOrders'),
-      api('getAllLedger'),
-      api('getAllProfiles')
-    ]);
-    allPositions = posRes.data || [];
-    orderHist    = ordRes.data  || [];
-    ledgerData   = ledRes.data  || [];
-    allUsers     = usrRes.data  || [];
-    renderPositions();
-    renderHistory();
-    renderLedger();
-    renderAdminUsers();
-  } else {
-    const [posRes, ordRes, ledRes, profRes] = await Promise.all([
-      api('getPositions', { mobile: m }),
-      api('getOrders',    { mobile: m }),
-      api('getAllLedger', { mobile: m }),
-      api('getProfile',   { mobile: m })
-    ]);
-    positions  = posRes.data  || [];
-    orderHist  = ordRes.data  || [];
-    ledgerData = (ledRes.data || []).filter(e => e.mobile === m);
-    if (profRes.data) {
-      session.wallet = parseFloat(profRes.data.wallet_balance);
-      updateWalletDisplay();
-    }
-    renderPositions();
-    renderHistory();
-    renderLedger();
-  }
-}
+<footer class="site-footer">
+  <div class="wrap">Powered by MT4 → Supabase → Live Web</div>
+</footer>
 
-// ── BOOT ─────────────────────────────────────────────────────────────────────
-(async () => {
-  // check existing session
-  const saved = localStorage.getItem('session');
-  if (saved) {
-    try { session = JSON.parse(saved); } catch { session = null; }
-  }
+<!-- ═══════════════════════════════════════════════ BUY MODAL -->
+<div id="buyModal" class="modal-overlay hidden">
+  <div class="modal-box">
+    <div class="modal-header">
+      <span>Buy <span id="buySymbol"></span></span>
+      <button class="modal-close" onclick="closeBuyModal()">✕</button>
+    </div>
+    <div class="modal-row"><span>Live Ask</span><strong id="buyAsk">--</strong></div>
+    <label>Quantity (units)</label>
+    <input id="buyQty" type="number" value="1" min="1" />
+    <div class="modal-row cost-row">
+      <span>Total Cost</span>
+      <strong id="buyCost">--</strong>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-success" onclick="executeBuy()">CONFIRM BUY</button>
+      <button class="btn-ghost2" onclick="closeBuyModal()">Cancel</button>
+    </div>
+  </div>
+</div>
 
-  if (session) {
-    document.getElementById('loginOverlay').style.display = 'none';
-    bootDashboard();
-  }
+<!-- ═══════════════════════════════════════════════ SELL MODAL -->
+<div id="sellModal" class="modal-overlay hidden">
+  <div class="modal-box">
+    <div class="modal-header">
+      <span>Close Position: <span id="sellSymbol"></span></span>
+      <button class="modal-close" onclick="closeSellModal()">✕</button>
+    </div>
+    <div class="modal-row"><span>Entry Price</span><strong id="sellEntry">--</strong></div>
+    <div class="modal-row"><span>Live Bid</span><strong id="sellBid">--</strong></div>
+    <div class="modal-row"><span>Quantity</span><strong id="sellQty">--</strong></div>
+    <div class="modal-row cost-row">
+      <span>Est. P&amp;L</span>
+      <strong id="sellPnl">--</strong>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-danger" onclick="executeSell()">CONFIRM SELL</button>
+      <button class="btn-ghost2" onclick="closeSellModal()">Cancel</button>
+    </div>
+  </div>
+</div>
 
-  // always start the price feed regardless of login state
-  await loadInitialPrices();
-  subscribePrices();
-})();
+<!-- ═══════════════════════════════════════════════ JV MODAL -->
+<div id="jvModal" class="modal-overlay hidden">
+  <div class="modal-box">
+    <div class="modal-header">
+      <span id="jvTitle">Wallet Adjustment</span>
+      <button class="modal-close" onclick="closeJVModal()">✕</button>
+    </div>
+    <div id="jvAdminFields">
+      <label>Client Mobile</label>
+      <input id="jvMobile" type="tel" placeholder="10-digit mobile" maxlength="10" />
+    </div>
+    <label>Amount (₹)</label>
+    <input id="jvAmount" type="number" min="1" placeholder="e.g. 5000" />
+    <label>Type</label>
+    <div class="toggle-row">
+      <button id="jvCreditBtn" class="toggle-btn active" onclick="setJVType('CREDIT')">CREDIT</button>
+      <button id="jvDebitBtn" class="toggle-btn" onclick="setJVType('DEBIT')">DEBIT</button>
+    </div>
+    <label>Narration</label>
+    <input id="jvNarration" type="text" placeholder="e.g. Paper trade adjustment" />
+    <div class="modal-actions">
+      <button class="btn-success" onclick="executeJV()">SAVE</button>
+      <button class="btn-ghost2" onclick="closeJVModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════ CREATE USER MODAL -->
+<div id="createUserModal" class="modal-overlay hidden">
+  <div class="modal-box">
+    <div class="modal-header">
+      <span>Create New User</span>
+      <button class="modal-close" onclick="closeCreateUserModal()">✕</button>
+    </div>
+    <label>Mobile Number</label>
+    <input id="newUserMobile" type="tel" placeholder="10-digit mobile" maxlength="10" />
+    <label>Password</label>
+    <input id="newUserPassword" type="text" placeholder="Initial password" />
+    <label>Starting Wallet (₹)</label>
+    <input id="newUserWallet" type="number" value="100000" />
+    <div class="modal-actions">
+      <button class="btn-success" onclick="executeCreateUser()">CREATE</button>
+      <button class="btn-ghost2" onclick="closeCreateUserModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════ SCRIPTS -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+<script src="script.js"></script>
+</body>
+</html>
