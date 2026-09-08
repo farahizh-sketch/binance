@@ -93,6 +93,12 @@ function bootDashboard() {
   mobileEl.textContent = session.mobile;
   mobileEl.style.display = '';
 
+  // show Trade buttons on all already-rendered rows
+  rowRegistry.forEach(entry => {
+    entry.buyBtn.style.display  = '';
+    entry.sellBtn.style.display = '';
+  });
+
   if (session.isAdmin) {
     document.getElementById('adminBtn').style.display = '';
     document.getElementById('ledgerTitle').textContent = 'Client Ledger';
@@ -135,7 +141,13 @@ function updatePrice(symbol, bid, ask) {
   priceMap[symbol] = { bid, ask };
   document.getElementById('asOf').textContent = 'as of ' + new Date().toLocaleTimeString();
   upsertRow(symbol, bid, ask);
-  // refresh open sell modal if it's for this symbol
+
+  // live-refresh open buy modal
+  if (buyTarget?.symbol === symbol) {
+    document.getElementById('buyLiveAsk').textContent = ask;
+    calcBuyCost();
+  }
+  // live-refresh open sell modal
   if (sellTarget?.symbol === symbol) refreshSellModal();
 }
 
@@ -149,7 +161,6 @@ function upsertRow(symbol, bid, ask) {
 
   let entry = rowRegistry.get(symbol);
   if (!entry) {
-    // clear placeholder
     const empty = tbody.querySelector('.empty');
     if (empty) empty.closest('tr').remove();
 
@@ -159,22 +170,33 @@ function upsertRow(symbol, bid, ask) {
         ${symbol}
         ${label ? `<span class="symbol-sub">${label}</span>` : ''}
       </td>
-      <td class="price"></td>
-      <td class="price"></td>
-      <td><button class="chart-toggle" onclick="toggleChart('${symbol}')">Chart ▾</button></td>
-      <td class="trade-cell" style="${session ? '' : 'display:none'}">
-        <button class="btn-buy" onclick="openBuyModal('${symbol}')">Buy</button>
-      </td>`;
+      <td class="price-cell">
+        <span class="price bid-price"></span>
+        <button class="btn-sell-inline" style="display:none" onclick="openSellBySymbol('${symbol}')">Sell</button>
+      </td>
+      <td class="price-cell">
+        <span class="price ask-price"></span>
+        <button class="btn-buy-inline" style="display:none" onclick="openBuyModal('${symbol}')">Buy</button>
+      </td>
+      <td><button class="chart-toggle" onclick="toggleChart('${symbol}')">Chart ▾</button></td>`;
     tbody.appendChild(tr);
 
     entry = {
       tr,
-      bidCell: tr.children[1],
-      askCell: tr.children[2],
+      bidCell:  tr.querySelector('.bid-price'),
+      askCell:  tr.querySelector('.ask-price'),
+      buyBtn:   tr.querySelector('.btn-buy-inline'),
+      sellBtn:  tr.querySelector('.btn-sell-inline'),
       lastBid: null, lastAsk: null,
       chartRow: null, chartOpen: false
     };
     rowRegistry.set(symbol, entry);
+  }
+
+  // show/hide trade buttons based on login state
+  if (session) {
+    entry.buyBtn.style.display  = '';
+    entry.sellBtn.style.display = '';
   }
 
   flashCell(entry.bidCell, bid, entry.lastBid);
@@ -238,7 +260,7 @@ function openBuyModal(symbol) {
   if (!p) return alert('No price available yet for ' + symbol);
   buyTarget = { symbol, ask: p.ask };
   document.getElementById('buySymbol').textContent = symbol;
-  document.getElementById('buyAsk').textContent = p.ask;
+  document.getElementById('buyLiveAsk').textContent = p.ask;
   document.getElementById('buyQty').value = 1;
   calcBuyCost();
   document.getElementById('buyModal').classList.remove('hidden');
@@ -249,14 +271,15 @@ function closeBuyModal() {
 }
 function calcBuyCost() {
   const qty = parseFloat(document.getElementById('buyQty').value) || 0;
-  document.getElementById('buyCost').textContent = fmtINR(qty * (buyTarget?.ask || 0));
+  const ask = buyTarget ? priceMap[buyTarget.symbol]?.ask || buyTarget.ask : 0;
+  document.getElementById('buyCost').textContent = fmtINR(qty * ask);
 }
 document.getElementById('buyQty').addEventListener('input', calcBuyCost);
 
 async function executeBuy() {
   if (!session || !buyTarget) return;
   const qty   = parseFloat(document.getElementById('buyQty').value);
-  const price = buyTarget.ask;
+  const price = priceMap[buyTarget.symbol]?.ask || buyTarget.ask;
   const cost  = qty * price;
   if (qty <= 0) return alert('Enter a valid quantity.');
   if (cost > session.wallet) return alert('❌ Insufficient wallet balance.');
@@ -283,9 +306,17 @@ async function executeBuy() {
 }
 
 // ── SELL ─────────────────────────────────────────────────────────────────────
+// Called from the inline Sell button on the price table row
+function openSellBySymbol(symbol) {
+  if (!session) return;
+  // find an open position for this symbol owned by the current user
+  const pos = positions.find(p => p.symbol === symbol);
+  if (!pos) return alert(`No open position found for ${symbol}.`);
+  openSellModal(pos);
+}
+
 function openSellModal(pos) {
   sellTarget = pos;
-  const p = priceMap[pos.symbol] || {};
   document.getElementById('sellSymbol').textContent = pos.symbol;
   document.getElementById('sellEntry').textContent  = fmt(pos.entry_price);
   document.getElementById('sellQty').textContent    = pos.quantity;
@@ -293,10 +324,13 @@ function openSellModal(pos) {
   document.getElementById('sellModal').classList.remove('hidden');
 }
 function refreshSellModal() {
-  const p = priceMap[sellTarget?.symbol] || {};
-  const bid = p.bid || sellTarget?.entry_price || 0;
+  if (!sellTarget) return;
+  const p   = priceMap[sellTarget.symbol] || {};
+  const bid = p.bid || sellTarget.entry_price || 0;
   const pnl = (bid - sellTarget.entry_price) * sellTarget.quantity;
-  document.getElementById('sellBid').textContent = bid;
+  const liveBidEl = document.getElementById('sellLiveBid');
+  liveBidEl.textContent = bid;
+  liveBidEl.className = 'ticker-price ' + (bid >= sellTarget.entry_price ? 'up' : 'down');
   document.getElementById('sellPnl').textContent = fmtINR(pnl);
   document.getElementById('sellPnl').style.color = pnl >= 0 ? 'var(--up)' : 'var(--down)';
 }
