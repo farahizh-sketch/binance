@@ -2,7 +2,6 @@
 // From your Supabase project: Project Settings > API
 const SUPABASE_URL = "https://pjibstvqozftsmcsjtsz.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_-Gf1DBodO9W61U0myjvFpg_KzD6yBcx"; // safe to expose in frontend code
-// ------------------
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -86,29 +85,27 @@ function logout() {
 }
 
 function bootDashboard() {
-  document.getElementById('loginOverlay').style.display = 'none';
+  const overlay = document.getElementById('loginOverlay');
+  if (overlay) overlay.style.display = 'none';
+
   updateWalletDisplay();
 
   const mobileEl = document.getElementById('userMobileDisplay');
-  mobileEl.textContent = session.mobile;
-  mobileEl.style.display = '';
+  if (mobileEl) { mobileEl.textContent = session.mobile; mobileEl.style.display = ''; }
 
-  // show Trade buttons on all already-rendered rows
+  // show trade buttons on any rows already rendered
   rowRegistry.forEach(entry => {
-    entry.buyBtn.style.display  = '';
-    entry.sellBtn.style.display = '';
+    if (entry.buyBtn)  entry.buyBtn.style.display  = '';
+    if (entry.sellBtn) entry.sellBtn.style.display = '';
   });
 
   if (session.isAdmin) {
-    document.getElementById('adminBtn').style.display = '';
-    document.getElementById('ledgerTitle').textContent = 'Client Ledger';
+    const adminBtn = document.getElementById('adminBtn');
+    if (adminBtn) adminBtn.style.display = '';
+    const ledgerTitle = document.getElementById('ledgerTitle');
+    if (ledgerTitle) ledgerTitle.textContent = 'Client Ledger';
   }
 
-  // show Trade column
-  document.getElementById('actionHeader').style.display = '';
-  document.querySelectorAll('.trade-cell').forEach(el => el.style.display = '');
-
-  syncData();
   setInterval(syncData, 10000);
 }
 
