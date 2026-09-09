@@ -1,7 +1,6 @@
-// ---- CONFIG ----
-// From your Supabase project: Project Settings > API
-const SUPABASE_URL = "https://pjibstvqozftsmcsjtsz.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_-Gf1DBodO9W61U0myjvFpg_KzD6yBcx"; // safe to expose in frontend code
+// ── CONFIG ──────────────────────────────────────────────────────────────────
+const SUPABASE_URL      = "https://YOUR_PROJECT_ID.supabase.co";
+const SUPABASE_ANON_KEY = "YOUR_ANON_PUBLIC_KEY";
 // ─────────────────────────────────────────────────────────────────────────────
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -77,14 +76,12 @@ function showRegister() {
   document.getElementById('regMobile').value = '';
   document.getElementById('regPassword').value = '';
   document.getElementById('regPasswordConfirm').value = '';
-  return false;
 }
 
 function showLogin() {
   document.getElementById('registerForm').style.display = 'none';
   document.getElementById('loginForm').style.display    = '';
   document.getElementById('loginError').textContent = '';
-  return false;
 }
 
 async function handleRegister() {
