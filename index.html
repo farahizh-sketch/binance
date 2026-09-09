@@ -27,16 +27,18 @@
     <span class="mark">FX</span>
     <span class="tagline">Live rates · streamed from MT4</span>
     <div class="header-right">
+      <span class="dot" id="statusDot"></span>
+      <span id="statusText" class="status-txt">connecting…</span>
+      <span class="asof" id="asOf"></span>
       <div class="wallet-chip" onclick="openJVModal()" id="walletChip" style="display:none">
         <span class="wallet-label">Wallet</span>
         <span class="wallet-val">₹<span id="walletAmt">0</span></span>
       </div>
-      <span id="userMobileDisplay" class="user-mobile" style="display:none"></span>
-      <span class="dot" id="statusDot"></span>
-      <span id="statusText" class="status-txt">connecting…</span>
-      <span class="asof" id="asOf"></span>
-      <button class="btn-sm btn-ghost" id="adminBtn" style="display:none" onclick="toggleAdminPanel()">Admin</button>
-      <button class="btn-sm btn-danger" onclick="logout()">Logout</button>
+      <div class="user-chip" id="userChip" style="display:none">
+        <span id="userMobileDisplay" class="user-chip-mobile"></span>
+        <button class="btn-sm btn-ghost" id="adminBtn" style="display:none" onclick="toggleAdminPanel()">Admin</button>
+        <button class="user-chip-logout" onclick="logout()">Logout</button>
+      </div>
     </div>
   </div>
 </header>
