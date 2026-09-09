@@ -120,7 +120,8 @@ async function handleRegister() {
   bootDashboard();
   await syncData();
 }
-  localStorage.removeItem('session');
+
+function logout() {
   session = null;
   document.getElementById('loginOverlay').classList.remove('hidden');
   document.getElementById('loginOverlay').style.display = 'flex';
