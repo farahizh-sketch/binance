@@ -677,18 +677,20 @@ async function syncData() {
     renderLedger();
     renderAdminUsers();
   } else {
+    // Read directly from Supabase JS client (anon key is safe for reads)
+    // so this works even when /api/supabase is unavailable (e.g. local file open)
     const [posRes, ordRes, ledRes, profRes] = await Promise.all([
-      api('getPositions', { mobile: m }),
-      api('getOrders',    { mobile: m }),
-      api('getAllLedger', { mobile: m }),
-      api('getProfile',   { mobile: m })
+      sb.from('positions').select('*').eq('mobile', m).order('opened_at', { ascending: false }),
+      sb.from('orders').select('*').eq('mobile', m).order('created_at', { ascending: false }),
+      sb.from('ledger').select('*').eq('mobile', m).order('created_at', { ascending: false }),
+      sb.from('profiles').select('wallet_balance').eq('mobile', m).single()
     ]);
     positions  = posRes.data  || [];
     orderHist  = ordRes.data  || [];
-    ledgerData = (ledRes.data || []).filter(e => e.mobile === m);
+    ledgerData = ledRes.data  || [];
     if (profRes.data) {
       session.wallet = parseFloat(profRes.data.wallet_balance);
-      localStorage.setItem('session', JSON.stringify(session)); // keep localStorage in sync
+      localStorage.setItem('session', JSON.stringify(session));
       updateWalletDisplay();
     }
     renderPositions();
