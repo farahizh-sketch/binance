@@ -70,7 +70,59 @@ async function handleLogin() {
   bootDashboard();
 }
 
-function logout() {
+function showRegister() {
+  document.getElementById('loginForm').style.display    = 'none';
+  document.getElementById('registerForm').style.display = '';
+  document.getElementById('regError').textContent = '';
+  document.getElementById('regMobile').value = '';
+  document.getElementById('regPassword').value = '';
+  document.getElementById('regPasswordConfirm').value = '';
+  return false;
+}
+
+function showLogin() {
+  document.getElementById('registerForm').style.display = 'none';
+  document.getElementById('loginForm').style.display    = '';
+  document.getElementById('loginError').textContent = '';
+  return false;
+}
+
+async function handleRegister() {
+  const mobile   = document.getElementById('regMobile').value.trim();
+  const password = document.getElementById('regPassword').value;
+  const confirm  = document.getElementById('regPasswordConfirm').value;
+  const errEl    = document.getElementById('regError');
+  const btn      = document.getElementById('regBtn');
+  errEl.textContent = '';
+
+  if (!/^\d{10}$/.test(mobile))   { errEl.textContent = '❌ Enter a valid 10-digit mobile number.'; return; }
+  if (password.length < 4)         { errEl.textContent = '❌ Password must be at least 4 characters.'; return; }
+  if (password !== confirm)         { errEl.textContent = '❌ Passwords do not match.'; return; }
+
+  btn.textContent = 'CREATING…';
+  btn.disabled = true;
+
+  const res = await api('createUser', { mobile, password, wallet_balance: 100000 });
+
+  btn.textContent = 'CREATE ACCOUNT';
+  btn.disabled = false;
+
+  if (res.error) {
+    // Postgres unique violation = mobile already registered
+    const isDupe = JSON.stringify(res.error).includes('23505') || JSON.stringify(res.error).includes('duplicate');
+    errEl.textContent = isDupe
+      ? '❌ This mobile number is already registered.'
+      : '❌ Registration failed. Please try again.';
+    return;
+  }
+
+  // auto-login after successful registration
+  session = { mobile: res.data.mobile, isAdmin: false, wallet: parseFloat(res.data.wallet_balance) };
+  localStorage.setItem('session', JSON.stringify(session));
+  showLogin();
+  bootDashboard();
+  await syncData();
+}
   localStorage.removeItem('session');
   session = null;
   document.getElementById('loginOverlay').classList.remove('hidden');
