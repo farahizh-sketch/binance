@@ -753,6 +753,13 @@ async function syncData() {
 }
 
 // ── BOOT ─────────────────────────────────────────────────────────────────────
+// Attach button handlers on DOM ready as reliable fallback
+// (belt-and-suspenders alongside the inline onclick attributes)
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('loginBtn')?.addEventListener('click', handleLogin);
+  document.getElementById('regBtn')?.addEventListener('click', handleRegister);
+});
+
 (async () => {
   // Guard: catch obvious placeholder config early so the error is visible
   if (SUPABASE_URL.includes('YOUR_PROJECT_ID') || SUPABASE_ANON_KEY.includes('YOUR_ANON')) {
@@ -761,26 +768,32 @@ async function syncData() {
     return;
   }
 
-  // Always start the price feed — visible to everyone, login or not
-  await loadInitialPrices();
-  subscribePrices();
-
-  // Restore session if one exists
-  const saved = localStorage.getItem('session');
-  if (saved) {
-    try { session = JSON.parse(saved); } catch { session = null; }
+  // Price feed — wrapped so a Supabase error never kills login
+  try {
+    await loadInitialPrices();
+  } catch(err) {
+    console.error('[BOOT] loadInitialPrices failed:', err);
+  }
+  try {
+    subscribePrices();
+  } catch(err) {
+    console.error('[BOOT] subscribePrices failed:', err);
   }
 
+  // Restore session
+  try {
+    const saved = localStorage.getItem('session');
+    if (saved) session = JSON.parse(saved);
+  } catch { session = null; }
+
   if (session) {
-    console.log('[BOOT] Session found:', session.mobile, '| isAdmin:', session.isAdmin);
-    document.getElementById('loginOverlay').style.display = 'none';
-    bootDashboard();
-    console.log('[BOOT] Calling syncData...');
+    console.log('[BOOT] Session found:', session.mobile);
+    const overlay = document.getElementById('loginOverlay');
+    if (overlay) overlay.style.display = 'none';
+    try { bootDashboard(); } catch(err) { console.error('[BOOT] bootDashboard failed:', err); }
     try {
       await syncData();
-      console.log('[BOOT] syncData complete. positions:', positions.length, 'orders:', orderHist.length);
-    } catch(err) {
-      console.error('[BOOT] syncData failed:', err);
-    }
+      console.log('[BOOT] syncData done. positions:', positions.length);
+    } catch(err) { console.error('[BOOT] syncData failed:', err); }
   }
 })();
