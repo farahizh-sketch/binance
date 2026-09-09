@@ -2,6 +2,7 @@
 // From your Supabase project: Project Settings > API
 const SUPABASE_URL = "https://pjibstvqozftsmcsjtsz.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_-Gf1DBodO9W61U0myjvFpg_KzD6yBcx"; // safe to expose in frontend code
+// ─────────────────────────────────────────────────────────────────────────────
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -74,10 +75,10 @@ function logout() {
   session = null;
   document.getElementById('loginOverlay').classList.remove('hidden');
   document.getElementById('loginOverlay').style.display = 'flex';
-  document.getElementById('userMobileDisplay').style.display = 'none';
-  document.getElementById('adminBtn').style.display = 'none';
-  document.getElementById('actionHeader').style.display = 'none';
-  document.querySelectorAll('.trade-cell').forEach(el => el.style.display = 'none');
+  const chipEl = document.getElementById('userChip');
+  if (chipEl) chipEl.style.display = 'none';
+  const walletEl = document.getElementById('walletChip');
+  if (walletEl) walletEl.style.display = 'none';
   hidePanel('positionsPanel');
   hidePanel('historyPanel');
   hidePanel('ledgerPanel');
@@ -91,7 +92,9 @@ function bootDashboard() {
   updateWalletDisplay();
 
   const mobileEl = document.getElementById('userMobileDisplay');
-  if (mobileEl) { mobileEl.textContent = session.mobile; mobileEl.style.display = ''; }
+  if (mobileEl) { mobileEl.textContent = session.mobile; }
+  const chipEl = document.getElementById('userChip');
+  if (chipEl) chipEl.style.display = '';
 
   // show trade buttons on any rows already rendered
   rowRegistry.forEach(entry => {
