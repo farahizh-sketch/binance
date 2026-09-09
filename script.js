@@ -325,12 +325,13 @@ function openSellModal(pos) {
   sellTarget = pos;
   const isFresh = !!pos.isFresh;
   const p = priceMap[pos.symbol] || {};
+  const bid = p.bid || pos.entry_price || 0;
 
-  document.getElementById('sellSymbol').textContent = pos.symbol;
-  document.getElementById('sellModalTitle').innerHTML =
-    (isFresh ? 'New Sell: ' : 'Close Position: ') +
-    `<span id="sellSymbol">${pos.symbol}</span>`;
-  document.getElementById('sellEntry').textContent = isFresh ? (p.bid || '--') : fmt(pos.entry_price);
+  document.getElementById('sellModalTitle').textContent =
+    (isFresh ? 'New Sell: ' : 'Close Position: ') + pos.symbol;
+  document.getElementById('sellEntryLabel').textContent = isFresh ? 'Sell Price' : 'Entry Price';
+  document.getElementById('sellEntry').textContent      = fmt(bid);
+  document.getElementById('sellPnlLabel').textContent   = isFresh ? 'Est. Proceeds' : 'Est. P&L';
 
   // quantity: fixed for existing positions, editable for fresh sells
   document.getElementById('sellQtyRow').style.display      = isFresh ? 'none' : '';
@@ -344,19 +345,41 @@ function openSellModal(pos) {
 
 function refreshSellModal() {
   if (!sellTarget) return;
-  const p    = priceMap[sellTarget.symbol] || {};
-  const bid  = p.bid || sellTarget.entry_price || 0;
-  const qty  = sellTarget.isFresh
+  const isFresh  = !!sellTarget.isFresh;
+  const p        = priceMap[sellTarget.symbol] || {};
+  const qty      = isFresh
     ? (parseFloat(document.getElementById('sellQtyInput').value) || 1)
-    : sellTarget.quantity;
-  const pnl  = (sellTarget.isFresh ? 0 : (bid - sellTarget.entry_price) * qty);
+    : Math.abs(parseFloat(sellTarget.quantity));
+  const isShort  = !isFresh && parseFloat(sellTarget.quantity) < 0;
 
-  const liveBidEl = document.getElementById('sellLiveBid');
-  liveBidEl.textContent = bid;
-  liveBidEl.className   = 'ticker-price ' + (bid >= (sellTarget.entry_price || bid) ? 'up' : 'down');
+  // For fresh short: show bid (selling at bid). For closing a short: show ask (buying back at ask).
+  const livePrice = isShort ? (p.ask || sellTarget.entry_price) : (p.bid || sellTarget.entry_price || 0);
 
-  document.getElementById('sellPnl').textContent  = sellTarget.isFresh ? fmtINR(bid * qty) + ' received' : fmtINR(pnl);
-  document.getElementById('sellPnl').style.color  = sellTarget.isFresh ? 'var(--text)' : (pnl >= 0 ? 'var(--up)' : 'var(--down)');
+  const livePriceEl = document.getElementById('sellLiveBid');
+  livePriceEl.textContent = livePrice;
+  livePriceEl.className   = 'ticker-price';
+  document.getElementById('sellTickerLabel').textContent =
+    isFresh ? 'Live Bid' : isShort ? 'Live Ask (buy back)' : 'Live Bid';
+
+  let pnlText, pnlColor;
+  if (isFresh) {
+    // fresh short: wallet will be debited by bid × qty
+    pnlText  = '−' + fmtINR(livePrice * qty) + ' (wallet debit)';
+    pnlColor = 'var(--down)';
+  } else if (isShort) {
+    // closing a short: profit = entry − current ask, per unit
+    const pnl = (sellTarget.entry_price - livePrice) * qty;
+    pnlText  = fmtINR(pnl);
+    pnlColor = pnl >= 0 ? 'var(--up)' : 'var(--down)';
+  } else {
+    // closing a long: profit = current bid − entry, per unit
+    const pnl = (livePrice - sellTarget.entry_price) * qty;
+    pnlText  = fmtINR(pnl);
+    pnlColor = pnl >= 0 ? 'var(--up)' : 'var(--down)';
+  }
+
+  document.getElementById('sellPnl').textContent = pnlText;
+  document.getElementById('sellPnl').style.color = pnlColor;
 }
 function closeSellModal() {
   document.getElementById('sellModal').classList.add('hidden');
@@ -365,24 +388,33 @@ function closeSellModal() {
 
 async function executeSell() {
   if (!session || !sellTarget) return;
-  const p     = priceMap[sellTarget.symbol] || {};
-  const price = p.bid || sellTarget.entry_price;
+  const p      = priceMap[sellTarget.symbol] || {};
+  const price  = p.bid || sellTarget.entry_price;
   const isFresh = !!sellTarget.isFresh;
-  const qty   = isFresh
+  const qty    = isFresh
     ? (parseFloat(document.getElementById('sellQtyInput').value) || 1)
     : sellTarget.quantity;
-  const total = price * qty;
-  const pnl   = isFresh ? 0 : (price - sellTarget.entry_price) * qty;
-  const newBalance = session.wallet + total;
+  const total  = price * Math.abs(qty);
 
   if (isFresh) {
-    // fresh short sell: log the order + add a short position + credit wallet
+    // Fresh short sell — store qty as NEGATIVE, DEBIT wallet (you're selling short,
+    // putting up value, not receiving proceeds until you close the position)
+    const negQty      = -Math.abs(qty);
+    const newBalance  = session.wallet - total;
+    if (total > session.wallet) return alert('❌ Insufficient wallet balance.');
+
     const [posRes] = await Promise.all([
-      api('addPosition', { mobile: session.mobile, symbol: sellTarget.symbol, side: 'SELL', quantity: qty, entry_price: price }),
-      api('placeOrder',  { mobile: session.mobile, symbol: sellTarget.symbol, side: 'SELL', quantity: qty, price }),
+      api('addPosition', {
+        mobile: session.mobile, symbol: sellTarget.symbol,
+        side: 'SELL', quantity: negQty, entry_price: price
+      }),
+      api('placeOrder', {
+        mobile: session.mobile, symbol: sellTarget.symbol,
+        side: 'SELL', quantity: negQty, price
+      }),
       api('updateWalletWithLedger', {
-        mobile: session.mobile, newBalance, type: 'CREDIT', amount: total,
-        narration: `SELL ${sellTarget.symbol} x${qty} @ ${price}`
+        mobile: session.mobile, newBalance, type: 'DEBIT', amount: total,
+        narration: `SELL SHORT ${sellTarget.symbol} x${Math.abs(qty)} @ ${price}`
       })
     ]);
     if (posRes.error) return alert('❌ Sell failed: ' + JSON.stringify(posRes.error));
@@ -391,15 +423,22 @@ async function executeSell() {
     positions.push(posRes.data);
     renderPositions();
     closeSellModal();
-    alert(`✅ Sell order placed! ${qty} × ${sellTarget.symbol} @ ${price}`);
+    alert(`✅ Short sell placed: ${Math.abs(qty)} × ${sellTarget.symbol} @ ${price}\nWallet debited ${fmtINR(total)}`);
+
   } else {
-    // closing an existing position
+    // Closing an existing position — credit wallet with proceeds
+    const pnl        = (price - sellTarget.entry_price) * Math.abs(sellTarget.quantity);
+    const newBalance  = session.wallet + total;
+
     await Promise.all([
       api('deletePosition', { id: sellTarget.id }),
-      api('placeOrder', { mobile: session.mobile, symbol: sellTarget.symbol, side: 'SELL', quantity: qty, price }),
+      api('placeOrder', {
+        mobile: session.mobile, symbol: sellTarget.symbol,
+        side: 'SELL', quantity: sellTarget.quantity, price
+      }),
       api('updateWalletWithLedger', {
         mobile: session.mobile, newBalance, type: 'CREDIT', amount: total,
-        narration: `SELL ${sellTarget.symbol} x${qty} @ ${price}`
+        narration: `CLOSE ${sellTarget.symbol} x${Math.abs(sellTarget.quantity)} @ ${price}`
       })
     ]);
     session.wallet = newBalance;
@@ -424,30 +463,43 @@ function renderPositions() {
 
   let total = 0;
   const rows = list.map(pos => {
-    const p    = priceMap[pos.symbol] || {};
-    const bid  = p.bid || pos.entry_price;
-    const pnl  = (bid - pos.entry_price) * pos.quantity;
+    const p       = priceMap[pos.symbol] || {};
+    const qty     = parseFloat(pos.quantity);
+    const isShort = qty < 0;
+    const absQty  = Math.abs(qty);
+    // shorts use ask for mark-to-market (cost to buy back), longs use bid
+    const ltp     = isShort ? (p.ask || pos.entry_price) : (p.bid || pos.entry_price);
+    const pnl     = isShort
+      ? (pos.entry_price - ltp) * absQty   // profit when price falls
+      : (ltp - pos.entry_price) * absQty;  // profit when price rises
     total += pnl;
-    const cls  = pnl >= 0 ? 'up' : 'down';
-    const sellBtn = (!session?.isAdmin && pos.mobile === session?.mobile)
-      ? `<button class="btn-danger-sm" onclick="openSellModal(${JSON.stringify(pos).replace(/"/g, '&quot;')})">Sell</button>`
+
+    const cls        = pnl >= 0 ? 'up' : 'down';
+    const sideLabel  = isShort ? '<span class="down">SHORT</span>' : '<span class="up">LONG</span>';
+    const qtyDisplay = isShort ? `-${absQty}` : absQty;
+    const closeBtn   = !session?.isAdmin
+      ? `<button class="btn-danger-sm" onclick='openSellModal(${JSON.stringify(pos)})'>Close</button>`
       : '';
+
     return `<tr>
       <td>${pos.symbol}${session?.isAdmin ? `<br/><span class="muted">${pos.mobile}</span>` : ''}</td>
-      <td>${pos.quantity}</td>
+      <td>${sideLabel}</td>
+      <td>${qtyDisplay}</td>
       <td>${fmt(pos.entry_price)}</td>
-      <td>${bid}</td>
+      <td>${ltp}</td>
       <td class="${cls}">${fmtINR(pnl)}</td>
-      <td>${sellBtn}</td>
+      <td>${closeBtn}</td>
     </tr>`;
   }).join('');
 
   const totalCls = total >= 0 ? 'up' : 'down';
   pnlEl.textContent = `Total P&L: ${fmtINR(total)}`;
-  pnlEl.className = 'pnl-badge ' + totalCls;
+  pnlEl.className   = 'pnl-badge ' + totalCls;
 
   content.innerHTML = `<table class="inner-table">
-    <thead><tr><th>Symbol</th><th>Qty</th><th>Entry</th><th>LTP</th><th>P&L</th><th></th></tr></thead>
+    <thead><tr>
+      <th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>LTP</th><th>P&L</th><th></th>
+    </tr></thead>
     <tbody>${rows}</tbody>
   </table>`;
 }
