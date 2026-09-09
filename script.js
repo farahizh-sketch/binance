@@ -688,6 +688,7 @@ async function syncData() {
     ledgerData = (ledRes.data || []).filter(e => e.mobile === m);
     if (profRes.data) {
       session.wallet = parseFloat(profRes.data.wallet_balance);
+      localStorage.setItem('session', JSON.stringify(session)); // keep localStorage in sync
       updateWalletDisplay();
     }
     renderPositions();
@@ -718,5 +719,6 @@ async function syncData() {
   if (session) {
     document.getElementById('loginOverlay').style.display = 'none';
     bootDashboard();
+    await syncData(); // reload positions, history, ledger, wallet from DB on every page load
   }
 })();
