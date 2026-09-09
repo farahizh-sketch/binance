@@ -238,6 +238,14 @@ tr.chart-row td { padding: 0; border-bottom: 1px solid var(--border); }
   background: var(--bg); color: var(--muted); font-weight: 600; cursor: pointer; }
 .toggle-btn.active { background: var(--blue); color: #fff; border-color: var(--blue); }
 
+.show-more-row { text-align: center; padding: 10px 0 4px; }
+.show-more-btn {
+  background: none; border: 1px solid var(--border); color: var(--blue);
+  font-size: 12px; font-weight: 600; padding: 6px 20px; border-radius: 20px;
+  cursor: pointer; transition: background .15s, border-color .15s;
+}
+.show-more-btn:hover { background: var(--border); border-color: var(--blue); }
+
 /* ── FOOTER ──────────────────────────────────────────────────────────────── */
 .site-footer { border-top: 1px solid var(--border); padding: 16px 0; margin-top: 40px; }
 .site-footer .wrap { font-size: 12px; color: var(--muted); }
