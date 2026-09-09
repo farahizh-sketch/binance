@@ -30,17 +30,35 @@ body { background: var(--bg); color: var(--text); font-family: 'Inter', system-u
 .wallet-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
 .wallet-val { font-size: 14px; font-weight: 600; color: var(--up); font-variant-numeric: tabular-nums; }
 
-.user-mobile {
+.user-chip {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.user-chip-mobile {
   font-family: 'Space Grotesk', monospace;
   font-size: 13px;
   font-weight: 600;
   color: var(--text);
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 5px 10px;
+  padding: 6px 12px;
   letter-spacing: 0.03em;
+  border-right: 1px solid var(--border);
 }
+.user-chip-logout {
+  background: none;
+  border: none;
+  color: #f87171;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: background .15s;
+}
+.user-chip-logout:hover { background: #4b1a1a; }
 
 .status-txt { font-size: 12px; color: var(--muted); }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); display: inline-block; }
