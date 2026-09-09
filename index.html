@@ -12,12 +12,30 @@
 <div id="loginOverlay" class="overlay">
   <div class="login-box">
     <div class="login-logo">FX</div>
-    <h2>Welcome</h2>
-    <p class="login-sub">Enter your credentials to access the dashboard</p>
-    <input id="loginMobile" type="tel" placeholder="Mobile Number" maxlength="10" />
-    <input id="loginPassword" type="password" placeholder="Password" />
-    <button id="loginBtn" onclick="handleLogin()">ACCESS DASHBOARD</button>
-    <p id="loginError" class="login-error"></p>
+
+    <!-- LOGIN FORM -->
+    <div id="loginForm">
+      <h2>Welcome</h2>
+      <p class="login-sub">Enter your credentials to access the dashboard</p>
+      <input id="loginMobile" type="tel" placeholder="Mobile Number" maxlength="10" />
+      <input id="loginPassword" type="password" placeholder="Password" />
+      <button id="loginBtn" onclick="handleLogin()">ACCESS DASHBOARD</button>
+      <p id="loginError" class="login-error"></p>
+      <p class="login-switch">New here? <a href="#" onclick="showRegister()">Create an account</a></p>
+    </div>
+
+    <!-- REGISTER FORM -->
+    <div id="registerForm" style="display:none">
+      <h2>Create Account</h2>
+      <p class="login-sub">Sign up with your mobile number</p>
+      <input id="regMobile" type="tel" placeholder="10-digit Mobile Number" maxlength="10" />
+      <input id="regPassword" type="password" placeholder="Choose a Password" />
+      <input id="regPasswordConfirm" type="password" placeholder="Confirm Password" />
+      <button id="regBtn" onclick="handleRegister()">CREATE ACCOUNT</button>
+      <p id="regError" class="login-error"></p>
+      <p class="login-switch">Already have an account? <a href="#" onclick="showLogin()">Sign in</a></p>
+    </div>
+
   </div>
 </div>
 
