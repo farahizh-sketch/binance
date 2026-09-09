@@ -685,6 +685,10 @@ async function syncData() {
       sb.from('ledger').select('*').eq('mobile', m).order('created_at', { ascending: false }),
       sb.from('profiles').select('wallet_balance').eq('mobile', m).single()
     ]);
+    console.log('[SYNC] positions:', posRes.data, posRes.error);
+    console.log('[SYNC] orders:', ordRes.data, ordRes.error);
+    console.log('[SYNC] ledger:', ledRes.data, ledRes.error);
+    console.log('[SYNC] profile:', profRes.data, profRes.error);
     positions  = posRes.data  || [];
     orderHist  = ordRes.data  || [];
     ledgerData = ledRes.data  || [];
@@ -719,8 +723,15 @@ async function syncData() {
   }
 
   if (session) {
+    console.log('[BOOT] Session found:', session.mobile, '| isAdmin:', session.isAdmin);
     document.getElementById('loginOverlay').style.display = 'none';
     bootDashboard();
-    await syncData(); // reload positions, history, ledger, wallet from DB on every page load
+    console.log('[BOOT] Calling syncData...');
+    try {
+      await syncData();
+      console.log('[BOOT] syncData complete. positions:', positions.length, 'orders:', orderHist.length);
+    } catch(err) {
+      console.error('[BOOT] syncData failed:', err);
+    }
   }
 })();
