@@ -555,29 +555,42 @@ function renderPositions() {
 }
 
 // ── ORDER HISTORY ─────────────────────────────────────────────────────────────
+let historyExpanded = false;
 function renderHistory() {
   const panel   = document.getElementById('historyPanel');
   const content = document.getElementById('historyContent');
   if (!orderHist.length) { panel.classList.add('hidden'); return; }
   panel.classList.remove('hidden');
 
-  const rows = [...orderHist].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
-    .map(o => `<tr>
-      <td class="muted">${toIST(o.created_at)}</td>
-      <td>${o.symbol}${session?.isAdmin ? `<br/><span class="muted">${o.mobile}</span>` : ''}</td>
-      <td class="${o.side === 'BUY' ? 'up' : 'down'}">${o.side}</td>
-      <td>${o.quantity}</td>
-      <td>${fmt(o.price)}</td>
-      <td>${fmtINR(o.quantity * o.price)}</td>
-    </tr>`).join('');
+  const sorted = [...orderHist].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  const visible = historyExpanded ? sorted : sorted.slice(0, 4);
+  const hasMore = sorted.length > 4;
+
+  const rows = visible.map(o => `<tr>
+    <td class="muted">${toIST(o.created_at)}</td>
+    <td>${o.symbol}${session?.isAdmin ? `<br/><span class="muted">${o.mobile}</span>` : ''}</td>
+    <td class="${o.side === 'BUY' ? 'up' : 'down'}">${o.side}</td>
+    <td>${o.quantity}</td>
+    <td>${fmt(o.price)}</td>
+    <td>${fmtINR(o.quantity * o.price)}</td>
+  </tr>`).join('');
+
+  const toggleBtn = hasMore
+    ? `<div class="show-more-row">
+        <button class="show-more-btn" onclick="historyExpanded=!historyExpanded;renderHistory()">
+          ${historyExpanded ? '▲ Show less' : `▼ Show ${sorted.length - 4} more`}
+        </button>
+       </div>`
+    : '';
 
   content.innerHTML = `<table class="inner-table">
     <thead><tr><th>Time (IST)</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Price</th><th>Value</th></tr></thead>
     <tbody>${rows}</tbody>
-  </table>`;
+  </table>${toggleBtn}`;
 }
 
 // ── LEDGER ───────────────────────────────────────────────────────────────────
+let ledgerExpanded = false;
 function renderLedger() {
   const panel   = document.getElementById('ledgerPanel');
   const content = document.getElementById('ledgerContent');
@@ -585,22 +598,33 @@ function renderLedger() {
   if (!ledgerData.length) { panel.classList.add('hidden'); return; }
   panel.classList.remove('hidden');
 
-  if (!session?.isAdmin && ledgerData.length) {
-    const latest = [...ledgerData].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
-    badge.textContent = 'Balance: ' + fmtINR(latest.balance_after);
+  const sorted = [...ledgerData].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+  if (!session?.isAdmin && sorted.length) {
+    badge.textContent = 'Balance: ' + fmtINR(sorted[0].balance_after);
   } else {
     badge.textContent = '';
   }
 
-  const rows = [...ledgerData].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
-    .map(e => `<tr>
-      <td class="muted">${toIST(e.created_at)}</td>
-      ${session?.isAdmin ? `<td class="muted">${e.mobile}</td>` : ''}
-      <td class="${e.type === 'CREDIT' ? 'up' : 'down'}">${e.type}</td>
-      <td>${fmtINR(e.amount)}</td>
-      <td class="accent">${fmtINR(e.balance_after)}</td>
-      <td class="muted">${e.narration || '-'}</td>
-    </tr>`).join('');
+  const visible = ledgerExpanded ? sorted : sorted.slice(0, 4);
+  const hasMore = sorted.length > 4;
+
+  const rows = visible.map(e => `<tr>
+    <td class="muted">${toIST(e.created_at)}</td>
+    ${session?.isAdmin ? `<td class="muted">${e.mobile}</td>` : ''}
+    <td class="${e.type === 'CREDIT' ? 'up' : 'down'}">${e.type}</td>
+    <td>${fmtINR(e.amount)}</td>
+    <td class="accent">${fmtINR(e.balance_after)}</td>
+    <td class="muted">${e.narration || '-'}</td>
+  </tr>`).join('');
+
+  const toggleBtn = hasMore
+    ? `<div class="show-more-row">
+        <button class="show-more-btn" onclick="ledgerExpanded=!ledgerExpanded;renderLedger()">
+          ${ledgerExpanded ? '▲ Show less' : `▼ Show ${sorted.length - 4} more`}
+        </button>
+       </div>`
+    : '';
 
   content.innerHTML = `<table class="inner-table">
     <thead><tr>
@@ -609,7 +633,7 @@ function renderLedger() {
       <th>Type</th><th>Amount</th><th>Balance After</th><th>Note</th>
     </tr></thead>
     <tbody>${rows}</tbody>
-  </table>`;
+  </table>${toggleBtn}`;
 }
 
 // ── ADMIN ─────────────────────────────────────────────────────────────────────
