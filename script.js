@@ -18,7 +18,15 @@ let sellTarget  = null;   // position object
 let jvType      = 'CREDIT';
 let widgetCtr   = 0;
 
-const COMMODITY_SYMBOLS = ['XAUUSD', 'XAGUSD', 'XBRUSD'];
+const SYMBOL_QTY = {
+  XAUUSD: { default: 1,    step: 1    },
+  XAGUSD: { default: 50,   step: 50   },
+  XBRUSD: { default: 10,   step: 10   },
+  BTCUSD: { default: 0.01, step: 0.01 },
+};
+function qtyConfig(symbol) {
+  return SYMBOL_QTY[symbol] || { default: 1000, step: 1000 };
+}
 const COMMODITY_LABELS  = { XAUUSD: 'Gold', XAGUSD: 'Silver', XBRUSD: 'Crude' };
 const TV_SYMBOLS        = { XAUUSD: 'OANDA:XAUUSD', XAGUSD: 'OANDA:XAGUSD', XBRUSD: 'TVC:UKOIL' };
 const rowRegistry       = new Map(); // symbol → { tr, bidCell, askCell, lastBid, lastAsk, chartRow, chartOpen }
@@ -189,7 +197,7 @@ function subscribePrices() {
 
 function updatePrice(symbol, bid, ask) {
   priceMap[symbol] = { bid, ask };
-  document.getElementById('asOf').textContent = '@ ' + new Date().toLocaleTimeString();
+  document.getElementById('asOf').textContent = 'as of ' + new Date().toLocaleTimeString();
   upsertRow(symbol, bid, ask);
 
   // live-refresh open buy modal
@@ -309,9 +317,13 @@ function openBuyModal(symbol) {
   const p = priceMap[symbol];
   if (!p) return alert('No price available yet for ' + symbol);
   buyTarget = { symbol, ask: p.ask };
+  const { default: def, step } = qtyConfig(symbol);
   document.getElementById('buySymbol').textContent = symbol;
   document.getElementById('buyLiveAsk').textContent = p.ask;
-  document.getElementById('buyQty').value = 1;
+  const qtyInput = document.getElementById('buyQty');
+  qtyInput.value = def;
+  qtyInput.step  = step;
+  qtyInput.min   = step;
   calcBuyCost();
   document.getElementById('buyModal').classList.remove('hidden');
 }
@@ -329,6 +341,8 @@ document.getElementById('buyQty').addEventListener('input', calcBuyCost);
 async function executeBuy() {
   if (!session || !buyTarget) return;
   const qty   = parseFloat(document.getElementById('buyQty').value);
+  const { step } = qtyConfig(buyTarget.symbol);
+  if (qty <= 0 || qty % step !== 0) return alert(`❌ Quantity must be a multiple of ${step}.`);
   const price = priceMap[buyTarget.symbol]?.ask || buyTarget.ask;
   const cost  = qty * price;
   if (qty <= 0) return alert('Enter a valid quantity.');
@@ -361,13 +375,12 @@ function openSellBySymbol(symbol) {
   if (!session) return;
   const p = priceMap[symbol];
   if (!p) return alert('No price available yet for ' + symbol);
-  // if user has an open position for this symbol, pre-fill it
   const existing = positions.find(pos => pos.symbol === symbol);
   if (existing) {
     openSellModal(existing);
   } else {
-    // open a fresh short sell
-    openSellModal({ symbol, entry_price: p.bid, quantity: 1, id: null, isFresh: true });
+    const { default: def, step } = qtyConfig(symbol);
+    openSellModal({ symbol, entry_price: p.bid, quantity: def, id: null, isFresh: true, _step: step });
   }
 }
 
@@ -383,11 +396,18 @@ function openSellModal(pos) {
   document.getElementById('sellEntry').textContent      = fmt(bid);
   document.getElementById('sellPnlLabel').textContent   = isFresh ? 'Est. Proceeds' : 'Est. P&L';
 
-  // quantity: fixed for existing positions, editable for fresh sells
   document.getElementById('sellQtyRow').style.display      = isFresh ? 'none' : '';
   document.getElementById('sellQtyInputRow').style.display = isFresh ? '' : 'none';
-  if (!isFresh) document.getElementById('sellQtyDisplay').textContent = pos.quantity;
-  if (isFresh)  document.getElementById('sellQtyInput').value = 1;
+  if (!isFresh) {
+    document.getElementById('sellQtyDisplay').textContent = Math.abs(pos.quantity);
+  }
+  if (isFresh) {
+    const { default: def, step } = qtyConfig(pos.symbol);
+    const qtyInput = document.getElementById('sellQtyInput');
+    qtyInput.value = pos._step ? pos.quantity : def;
+    qtyInput.step  = pos._step || step;
+    qtyInput.min   = pos._step || step;
+  }
 
   refreshSellModal();
   document.getElementById('sellModal').classList.remove('hidden');
