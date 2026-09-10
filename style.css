@@ -156,6 +156,17 @@ tr.chart-row td { padding: 0; border-bottom: 1px solid var(--border); }
 }
 .btn-danger-full:hover { background: #7f1d1d; }
 
+/* stale price rows */
+tr.row-stale td { color: #3a4450 !important; }
+tr.row-stale .symbol-sub { color: #2a3340 !important; }
+tr.row-stale .btn-buy-inline,
+tr.row-stale .btn-sell-inline {
+  opacity: 0.25;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+tr.row-stale .price { color: #3a4450 !important; }
+
 .note { margin-top: 16px; font-size: 12px; color: var(--muted); }
 
 /* ── PANELS ──────────────────────────────────────────────────────────────── */
