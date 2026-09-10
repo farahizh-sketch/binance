@@ -351,6 +351,8 @@ document.getElementById('buyQty').addEventListener('input', calcBuyCost);
 
 async function executeBuy() {
   if (!session || !buyTarget) return;
+  const lastUpd = priceLastUpdated.get(buyTarget.symbol) || 0;
+  if ((Date.now() - lastUpd) > STALE_MS) return alert('❌ Price feed is stale for ' + buyTarget.symbol + '. Cannot place order until live price resumes.');
   const qty = parseFloat(document.getElementById('buyQty').value);
   const { step } = qtyConfig(buyTarget.symbol);
   if (qty <= 0 || qty % step !== 0) return alert(`❌ Quantity must be a multiple of ${step}.`);
@@ -462,6 +464,8 @@ function closeSellModal() {
 
 async function executeSell() {
   if (!session || !sellTarget) return;
+  const lastUpd = priceLastUpdated.get(sellTarget.symbol) || 0;
+  if ((Date.now() - lastUpd) > STALE_MS) return alert('❌ Price feed is stale for ' + sellTarget.symbol + '. Cannot place order until live price resumes.');
   const p      = priceMap[sellTarget.symbol] || {};
   const price  = p.bid || sellTarget.entry_price;
   const isFresh = !!sellTarget.isFresh;
@@ -535,17 +539,21 @@ function renderPositions() {
     const cls       = pnl >= 0 ? 'up' : 'down';
     const sideLabel = isShort ? '<span class="down">SHORT</span>' : '<span class="up">LONG</span>';
     const qtyDisplay = isShort ? `-${absQty}` : absQty;
-    const closeBtn  = !session?.isAdmin
-      ? `<button class="btn-danger-sm" onclick='openSellModal(${JSON.stringify(pos)})'>Close</button>`
+    const now      = Date.now();
+    const lastUpd  = priceLastUpdated.get(pos.symbol) || 0;
+    const isStale  = (now - lastUpd) > STALE_MS;
+    const staleRow = isStale ? ' class="row-stale"' : '';
+    const closeBtn = !session?.isAdmin
+      ? `<button class="btn-danger-sm" ${isStale ? 'disabled style="opacity:.25;cursor:not-allowed"' : ''} onclick='openSellModal(${JSON.stringify(pos)})'>Close</button>`
       : '';
 
-    return `<tr>
+    return `<tr${staleRow}>
       <td>${pos.symbol}${session?.isAdmin ? `<br/><span class="muted">${pos.mobile}</span>` : ''}</td>
       <td>${sideLabel}</td>
       <td>${qtyDisplay}</td>
       <td>${fmt(pos.entry_price)}</td>
-      <td>${ltp}</td>
-      <td class="${cls}">${fmtINR(pnl)}</td>
+      <td>${isStale ? '<span class="stale-label">stale</span>' : ltp}</td>
+      <td class="${cls}">${isStale ? '--' : fmtINR(pnl)}</td>
       <td>${closeBtn}</td>
     </tr>`;
   }).join('');
