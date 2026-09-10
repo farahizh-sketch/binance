@@ -156,7 +156,14 @@ tr.chart-row td { padding: 0; border-bottom: 1px solid var(--border); }
 }
 .btn-danger-full:hover { background: #7f1d1d; }
 
-/* stale price rows */
+.stale-label {
+  font-size: 10px;
+  color: #3a4450;
+  font-style: italic;
+  letter-spacing: 0.04em;
+}
+
+.note {
 tr.row-stale td { color: #3a4450 !important; }
 tr.row-stale .symbol-sub { color: #2a3340 !important; }
 tr.row-stale .btn-buy-inline,
