@@ -2,6 +2,10 @@
 const SUPABASE_URL      = "https://pjibstvqozftsmcsjtsz.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_-Gf1DBodO9W61U0myjvFpg_KzD6yBcx";
 // ─────────────────────────────────────────────────────────────────────────────
+// ── CONFIG ──────────────────────────────────────────────────────────────────
+const SUPABASE_URL      = "https://pjibstvqozftsmcsjtsz.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_-Gf1DBodO9W61U0myjvFpg_KzD6yBcx";
+// ─────────────────────────────────────────────────────────────────────────────
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -33,7 +37,22 @@ function qtyConfig(symbol) {
   return SYMBOL_QTY[symbol] || { default: 1000, step: 1000 };
 }
 
-// ── API HELPER ───────────────────────────────────────────────────────────────
+const priceLastUpdated = new Map(); // symbol → timestamp
+const STALE_MS = 10000; // 10 seconds without update = stale
+
+function checkStaleRows() {
+  const now = Date.now();
+  rowRegistry.forEach((entry, symbol) => {
+    const last = priceLastUpdated.get(symbol) || 0;
+    const isStale = (now - last) > STALE_MS;
+    entry.tr.classList.toggle('row-stale', isStale);
+    if (entry.buyBtn)  entry.buyBtn.disabled  = isStale;
+    if (entry.sellBtn) entry.sellBtn.disabled = isStale;
+    // also update chart row if open
+    if (entry.chartRow) entry.chartRow.classList.toggle('row-stale', isStale);
+  });
+}
+setInterval(checkStaleRows, 3000);
 async function api(action, payload = {}) {
   const res = await fetch('/api/supabase', {
     method: 'POST',
@@ -196,6 +215,7 @@ function subscribePrices() {
 
 function updatePrice(symbol, bid, ask) {
   priceMap[symbol] = { bid, ask };
+  priceLastUpdated.set(symbol, Date.now());
   document.getElementById('asOf').textContent = 'as of ' + new Date().toLocaleTimeString();
   upsertRow(symbol, bid, ask);
   if (buyTarget?.symbol === symbol) {
