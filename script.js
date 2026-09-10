@@ -6,17 +6,22 @@ const SUPABASE_ANON_KEY = "sb_publishable_-Gf1DBodO9W61U0myjvFpg_KzD6yBcx";
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // ── STATE ────────────────────────────────────────────────────────────────────
-let session     = null;   // { mobile, isAdmin, wallet }
-let priceMap    = {};     // { symbol: { bid, ask } }
-let positions   = [];     // array of position objects from DB
-let orderHist   = [];
-let ledgerData  = [];
-let allUsers    = [];
+let session      = null;
+let priceMap     = {};
+let positions    = [];
+let orderHist    = [];
+let ledgerData   = [];
+let allUsers     = [];
 let allPositions = [];
-let buyTarget   = null;   // { symbol, ask }
-let sellTarget  = null;   // position object
-let jvType      = 'CREDIT';
-let widgetCtr   = 0;
+let buyTarget    = null;
+let sellTarget   = null;
+let jvType       = 'CREDIT';
+let widgetCtr    = 0;
+
+const COMMODITY_SYMBOLS = ['XAUUSD', 'XAGUSD', 'XBRUSD'];
+const COMMODITY_LABELS  = { XAUUSD: 'Gold', XAGUSD: 'Silver', XBRUSD: 'Crude' };
+const TV_SYMBOLS        = { XAUUSD: 'OANDA:XAUUSD', XAGUSD: 'OANDA:XAGUSD', XBRUSD: 'TVC:UKOIL' };
+const rowRegistry       = new Map();
 
 const SYMBOL_QTY = {
   XAUUSD: { default: 1,    step: 1    },
@@ -27,9 +32,6 @@ const SYMBOL_QTY = {
 function qtyConfig(symbol) {
   return SYMBOL_QTY[symbol] || { default: 1000, step: 1000 };
 }
-const COMMODITY_LABELS  = { XAUUSD: 'Gold', XAGUSD: 'Silver', XBRUSD: 'Crude' };
-const TV_SYMBOLS        = { XAUUSD: 'OANDA:XAUUSD', XAGUSD: 'OANDA:XAGUSD', XBRUSD: 'TVC:UKOIL' };
-const rowRegistry       = new Map(); // symbol → { tr, bidCell, askCell, lastBid, lastAsk, chartRow, chartOpen }
 
 // ── API HELPER ───────────────────────────────────────────────────────────────
 async function api(action, payload = {}) {
@@ -75,6 +77,7 @@ async function handleLogin() {
   session = { mobile: res.data.mobile, isAdmin: res.data.is_admin, wallet: parseFloat(res.data.wallet_balance) };
   localStorage.setItem('session', JSON.stringify(session));
   bootDashboard();
+  await syncData();
 }
 
 function showRegister() {
@@ -100,28 +103,23 @@ async function handleRegister() {
   const btn      = document.getElementById('regBtn');
   errEl.textContent = '';
 
-  if (!/^\d{10}$/.test(mobile))   { errEl.textContent = '❌ Enter a valid 10-digit mobile number.'; return; }
-  if (password.length < 4)         { errEl.textContent = '❌ Password must be at least 4 characters.'; return; }
-  if (password !== confirm)         { errEl.textContent = '❌ Passwords do not match.'; return; }
+  if (!/^\d{10}$/.test(mobile))  { errEl.textContent = '❌ Enter a valid 10-digit mobile number.'; return; }
+  if (password.length < 4)        { errEl.textContent = '❌ Password must be at least 4 characters.'; return; }
+  if (password !== confirm)        { errEl.textContent = '❌ Passwords do not match.'; return; }
 
   btn.textContent = 'CREATING…';
   btn.disabled = true;
 
   const res = await api('createUser', { mobile, password, wallet_balance: 100000 });
-
   btn.textContent = 'CREATE ACCOUNT';
   btn.disabled = false;
 
   if (res.error) {
-    // Postgres unique violation = mobile already registered
     const isDupe = JSON.stringify(res.error).includes('23505') || JSON.stringify(res.error).includes('duplicate');
-    errEl.textContent = isDupe
-      ? '❌ This mobile number is already registered.'
-      : '❌ Registration failed. Please try again.';
+    errEl.textContent = isDupe ? '❌ This mobile number is already registered.' : '❌ Registration failed. Please try again.';
     return;
   }
 
-  // auto-login after successful registration
   session = { mobile: res.data.mobile, isAdmin: false, wallet: parseFloat(res.data.wallet_balance) };
   localStorage.setItem('session', JSON.stringify(session));
   showLogin();
@@ -130,6 +128,7 @@ async function handleRegister() {
 }
 
 function logout() {
+  localStorage.removeItem('session');
   session = null;
   document.getElementById('loginOverlay').classList.remove('hidden');
   document.getElementById('loginOverlay').style.display = 'flex';
@@ -150,11 +149,10 @@ function bootDashboard() {
   updateWalletDisplay();
 
   const mobileEl = document.getElementById('userMobileDisplay');
-  if (mobileEl) { mobileEl.textContent = session.mobile; }
+  if (mobileEl) mobileEl.textContent = session.mobile;
   const chipEl = document.getElementById('userChip');
   if (chipEl) chipEl.style.display = '';
 
-  // show trade buttons on any rows already rendered
   rowRegistry.forEach(entry => {
     if (entry.buyBtn)  entry.buyBtn.style.display  = '';
     if (entry.sellBtn) entry.sellBtn.style.display = '';
@@ -177,9 +175,10 @@ function updateWalletDisplay() {
     session.wallet.toLocaleString('en-IN', { minimumFractionDigits: 2 });
 }
 
-// ── PRICE FEED (Supabase Realtime) ───────────────────────────────────────────
+// ── PRICE FEED ───────────────────────────────────────────────────────────────
 async function loadInitialPrices() {
-  const { data } = await sb.from('live_prices').select('*');
+  const { data, error } = await sb.from('live_prices').select('*');
+  if (error) { console.error('[PRICES] load error:', error); return; }
   if (data) data.forEach(r => updatePrice(r.symbol, r.bid, r.ask));
 }
 
@@ -199,13 +198,10 @@ function updatePrice(symbol, bid, ask) {
   priceMap[symbol] = { bid, ask };
   document.getElementById('asOf').textContent = 'as of ' + new Date().toLocaleTimeString();
   upsertRow(symbol, bid, ask);
-
-  // live-refresh open buy modal
   if (buyTarget?.symbol === symbol) {
     document.getElementById('buyLiveAsk').textContent = ask;
     calcBuyCost();
   }
-  // live-refresh open sell modal
   if (sellTarget?.symbol === symbol) refreshSellModal();
 }
 
@@ -251,7 +247,6 @@ function upsertRow(symbol, bid, ask) {
     rowRegistry.set(symbol, entry);
   }
 
-  // show/hide trade buttons based on login state
   if (session) {
     entry.buyBtn.style.display  = '';
     entry.sellBtn.style.display = '';
@@ -291,7 +286,7 @@ function toggleChart(symbol) {
   const chartRow = document.createElement('tr');
   chartRow.className = 'chart-row';
   const td = document.createElement('td');
-  td.colSpan = 5;
+  td.colSpan = 4;
   const id = 'tv_' + (widgetCtr++);
   const div = document.createElement('div');
   div.id = id;
@@ -340,17 +335,15 @@ document.getElementById('buyQty').addEventListener('input', calcBuyCost);
 
 async function executeBuy() {
   if (!session || !buyTarget) return;
-  const qty   = parseFloat(document.getElementById('buyQty').value);
+  const qty = parseFloat(document.getElementById('buyQty').value);
   const { step } = qtyConfig(buyTarget.symbol);
   if (qty <= 0 || qty % step !== 0) return alert(`❌ Quantity must be a multiple of ${step}.`);
   const price = priceMap[buyTarget.symbol]?.ask || buyTarget.ask;
   const cost  = qty * price;
-  if (qty <= 0) return alert('Enter a valid quantity.');
   if (cost > session.wallet) return alert('❌ Insufficient wallet balance.');
 
   const newBalance = session.wallet - cost;
-
-  const [posRes, , walRes] = await Promise.all([
+  const [posRes] = await Promise.all([
     api('addPosition', { mobile: session.mobile, symbol: buyTarget.symbol, side: 'BUY', quantity: qty, entry_price: price }),
     api('placeOrder',  { mobile: session.mobile, symbol: buyTarget.symbol, side: 'BUY', quantity: qty, price }),
     api('updateWalletWithLedger', {
@@ -370,7 +363,6 @@ async function executeBuy() {
 }
 
 // ── SELL ─────────────────────────────────────────────────────────────────────
-// Called from the inline Sell button on the price table row
 function openSellBySymbol(symbol) {
   if (!session) return;
   const p = priceMap[symbol];
@@ -387,7 +379,7 @@ function openSellBySymbol(symbol) {
 function openSellModal(pos) {
   sellTarget = pos;
   const isFresh = !!pos.isFresh;
-  const p = priceMap[pos.symbol] || {};
+  const p   = priceMap[pos.symbol] || {};
   const bid = p.bid || pos.entry_price || 0;
 
   document.getElementById('sellModalTitle').textContent =
@@ -421,8 +413,6 @@ function refreshSellModal() {
     ? (parseFloat(document.getElementById('sellQtyInput').value) || 1)
     : Math.abs(parseFloat(sellTarget.quantity));
   const isShort  = !isFresh && parseFloat(sellTarget.quantity) < 0;
-
-  // For fresh short: show bid (selling at bid). For closing a short: show ask (buying back at ask).
   const livePrice = isShort ? (p.ask || sellTarget.entry_price) : (p.bid || sellTarget.entry_price || 0);
 
   const livePriceEl = document.getElementById('sellLiveBid');
@@ -433,16 +423,13 @@ function refreshSellModal() {
 
   let pnlText, pnlColor;
   if (isFresh) {
-    // fresh short: wallet will be debited by bid × qty
     pnlText  = '−' + fmtINR(livePrice * qty) + ' (wallet debit)';
     pnlColor = 'var(--down)';
   } else if (isShort) {
-    // closing a short: profit = entry − current ask, per unit
     const pnl = (sellTarget.entry_price - livePrice) * qty;
     pnlText  = fmtINR(pnl);
     pnlColor = pnl >= 0 ? 'var(--up)' : 'var(--down)';
   } else {
-    // closing a long: profit = current bid − entry, per unit
     const pnl = (livePrice - sellTarget.entry_price) * qty;
     pnlText  = fmtINR(pnl);
     pnlColor = pnl >= 0 ? 'var(--up)' : 'var(--down)';
@@ -451,6 +438,7 @@ function refreshSellModal() {
   document.getElementById('sellPnl').textContent = pnlText;
   document.getElementById('sellPnl').style.color = pnlColor;
 }
+
 function closeSellModal() {
   document.getElementById('sellModal').classList.add('hidden');
   sellTarget = null;
@@ -467,21 +455,12 @@ async function executeSell() {
   const total  = price * Math.abs(qty);
 
   if (isFresh) {
-    // Fresh short sell — store qty as NEGATIVE, DEBIT wallet (you're selling short,
-    // putting up value, not receiving proceeds until you close the position)
-    const negQty      = -Math.abs(qty);
-    const newBalance  = session.wallet - total;
+    const negQty     = -Math.abs(qty);
+    const newBalance = session.wallet - total;
     if (total > session.wallet) return alert('❌ Insufficient wallet balance.');
-
     const [posRes] = await Promise.all([
-      api('addPosition', {
-        mobile: session.mobile, symbol: sellTarget.symbol,
-        side: 'SELL', quantity: negQty, entry_price: price
-      }),
-      api('placeOrder', {
-        mobile: session.mobile, symbol: sellTarget.symbol,
-        side: 'SELL', quantity: negQty, price
-      }),
+      api('addPosition', { mobile: session.mobile, symbol: sellTarget.symbol, side: 'SELL', quantity: negQty, entry_price: price }),
+      api('placeOrder',  { mobile: session.mobile, symbol: sellTarget.symbol, side: 'SELL', quantity: negQty, price }),
       api('updateWalletWithLedger', {
         mobile: session.mobile, newBalance, type: 'DEBIT', amount: total,
         narration: `SELL SHORT ${sellTarget.symbol} x${Math.abs(qty)} @ ${price}`
@@ -493,19 +472,13 @@ async function executeSell() {
     positions.push(posRes.data);
     renderPositions();
     closeSellModal();
-    alert(`✅ Short sell placed: ${Math.abs(qty)} × ${sellTarget.symbol} @ ${price}\nWallet debited ${fmtINR(total)}`);
-
+    alert(`✅ Short sell placed: ${Math.abs(qty)} × ${sellTarget.symbol} @ ${price}`);
   } else {
-    // Closing an existing position — credit wallet with proceeds
     const pnl        = (price - sellTarget.entry_price) * Math.abs(sellTarget.quantity);
-    const newBalance  = session.wallet + total;
-
+    const newBalance = session.wallet + total;
     await Promise.all([
       api('deletePosition', { id: sellTarget.id }),
-      api('placeOrder', {
-        mobile: session.mobile, symbol: sellTarget.symbol,
-        side: 'SELL', quantity: sellTarget.quantity, price
-      }),
+      api('placeOrder', { mobile: session.mobile, symbol: sellTarget.symbol, side: 'SELL', quantity: sellTarget.quantity, price }),
       api('updateWalletWithLedger', {
         mobile: session.mobile, newBalance, type: 'CREDIT', amount: total,
         narration: `CLOSE ${sellTarget.symbol} x${Math.abs(sellTarget.quantity)} @ ${price}`
@@ -537,17 +510,16 @@ function renderPositions() {
     const qty     = parseFloat(pos.quantity);
     const isShort = qty < 0;
     const absQty  = Math.abs(qty);
-    // shorts use ask for mark-to-market (cost to buy back), longs use bid
     const ltp     = isShort ? (p.ask || pos.entry_price) : (p.bid || pos.entry_price);
     const pnl     = isShort
-      ? (pos.entry_price - ltp) * absQty   // profit when price falls
-      : (ltp - pos.entry_price) * absQty;  // profit when price rises
+      ? (pos.entry_price - ltp) * absQty
+      : (ltp - pos.entry_price) * absQty;
     total += pnl;
 
-    const cls        = pnl >= 0 ? 'up' : 'down';
-    const sideLabel  = isShort ? '<span class="down">SHORT</span>' : '<span class="up">LONG</span>';
+    const cls       = pnl >= 0 ? 'up' : 'down';
+    const sideLabel = isShort ? '<span class="down">SHORT</span>' : '<span class="up">LONG</span>';
     const qtyDisplay = isShort ? `-${absQty}` : absQty;
-    const closeBtn   = !session?.isAdmin
+    const closeBtn  = !session?.isAdmin
       ? `<button class="btn-danger-sm" onclick='openSellModal(${JSON.stringify(pos)})'>Close</button>`
       : '';
 
@@ -582,7 +554,7 @@ function renderHistory() {
   if (!orderHist.length) { panel.classList.add('hidden'); return; }
   panel.classList.remove('hidden');
 
-  const sorted = [...orderHist].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  const sorted  = [...orderHist].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
   const visible = historyExpanded ? sorted : sorted.slice(0, 4);
   const hasMore = sorted.length > 4;
 
@@ -599,9 +571,7 @@ function renderHistory() {
     ? `<div class="show-more-row">
         <button class="show-more-btn" onclick="historyExpanded=!historyExpanded;renderHistory()">
           ${historyExpanded ? '▲ Show less' : `▼ Show ${sorted.length - 4} more`}
-        </button>
-       </div>`
-    : '';
+        </button></div>` : '';
 
   content.innerHTML = `<table class="inner-table">
     <thead><tr><th>Time (IST)</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Price</th><th>Value</th></tr></thead>
@@ -618,8 +588,7 @@ function renderLedger() {
   if (!ledgerData.length) { panel.classList.add('hidden'); return; }
   panel.classList.remove('hidden');
 
-  const sorted = [...ledgerData].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-
+  const sorted  = [...ledgerData].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
   if (!session?.isAdmin && sorted.length) {
     badge.textContent = 'Balance: ' + fmtINR(sorted[0].balance_after);
   } else {
@@ -642,9 +611,7 @@ function renderLedger() {
     ? `<div class="show-more-row">
         <button class="show-more-btn" onclick="ledgerExpanded=!ledgerExpanded;renderLedger()">
           ${ledgerExpanded ? '▲ Show less' : `▼ Show ${sorted.length - 4} more`}
-        </button>
-       </div>`
-    : '';
+        </button></div>` : '';
 
   content.innerHTML = `<table class="inner-table">
     <thead><tr>
@@ -698,14 +665,13 @@ async function adminResetPwd(mobile) {
   syncData();
 }
 
-// ── CREATE USER ───────────────────────────────────────────────────────────────
 function openCreateUserModal()  { document.getElementById('createUserModal').classList.remove('hidden'); }
 function closeCreateUserModal() { document.getElementById('createUserModal').classList.add('hidden'); }
 
 async function executeCreateUser() {
-  const mobile  = document.getElementById('newUserMobile').value.trim();
+  const mobile   = document.getElementById('newUserMobile').value.trim();
   const password = document.getElementById('newUserPassword').value.trim();
-  const wallet  = parseFloat(document.getElementById('newUserWallet').value);
+  const wallet   = parseFloat(document.getElementById('newUserWallet').value);
   if (!/^\d{10}$/.test(mobile)) return alert('Enter a valid 10-digit mobile number.');
   if (!password) return alert('Enter a password.');
   const res = await api('createUser', { mobile, password, wallet_balance: wallet });
@@ -736,8 +702,8 @@ function setJVType(type) {
 }
 
 async function executeJV() {
-  const mobile   = session.isAdmin ? document.getElementById('jvMobile').value.trim() : session.mobile;
-  const amount   = parseFloat(document.getElementById('jvAmount').value);
+  const mobile    = session.isAdmin ? document.getElementById('jvMobile').value.trim() : session.mobile;
+  const amount    = parseFloat(document.getElementById('jvAmount').value);
   const narration = document.getElementById('jvNarration').value.trim() || 'Manual adjustment';
   if (session.isAdmin && !/^\d{10}$/.test(mobile)) return alert('Enter a valid mobile number.');
   if (!amount || amount <= 0) return alert('Enter a valid amount.');
@@ -763,26 +729,24 @@ async function syncData() {
       api('getAllProfiles')
     ]);
     allPositions = posRes.data || [];
-    orderHist    = ordRes.data  || [];
-    ledgerData   = ledRes.data  || [];
-    allUsers     = usrRes.data  || [];
+    orderHist    = ordRes.data || [];
+    ledgerData   = ledRes.data || [];
+    allUsers     = usrRes.data || [];
     renderPositions();
     renderHistory();
     renderLedger();
     renderAdminUsers();
   } else {
-    // Read directly from Supabase JS client (anon key is safe for reads)
-    // so this works even when /api/supabase is unavailable (e.g. local file open)
     const [posRes, ordRes, ledRes, profRes] = await Promise.all([
       sb.from('positions').select('*').eq('mobile', m).order('opened_at', { ascending: false }),
       sb.from('orders').select('*').eq('mobile', m).order('created_at', { ascending: false }),
       sb.from('ledger').select('*').eq('mobile', m).order('created_at', { ascending: false }),
       sb.from('profiles').select('wallet_balance').eq('mobile', m).single()
     ]);
-    console.log('[SYNC] positions:', posRes.data, posRes.error);
-    console.log('[SYNC] orders:', ordRes.data, ordRes.error);
-    console.log('[SYNC] ledger:', ledRes.data, ledRes.error);
-    console.log('[SYNC] profile:', profRes.data, profRes.error);
+    if (posRes.error)  console.error('[SYNC] positions error:', posRes.error);
+    if (ordRes.error)  console.error('[SYNC] orders error:', ordRes.error);
+    if (ledRes.error)  console.error('[SYNC] ledger error:', ledRes.error);
+    if (profRes.error) console.error('[SYNC] profile error:', profRes.error);
     positions  = posRes.data  || [];
     orderHist  = ordRes.data  || [];
     ledgerData = ledRes.data  || [];
@@ -798,47 +762,24 @@ async function syncData() {
 }
 
 // ── BOOT ─────────────────────────────────────────────────────────────────────
-// Attach button handlers on DOM ready as reliable fallback
-// (belt-and-suspenders alongside the inline onclick attributes)
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('loginBtn')?.addEventListener('click', handleLogin);
   document.getElementById('regBtn')?.addEventListener('click', handleRegister);
 });
 
 (async () => {
-  // Guard: catch obvious placeholder config early so the error is visible
-  if (SUPABASE_URL.includes('YOUR_PROJECT_ID') || SUPABASE_ANON_KEY.includes('YOUR_ANON')) {
-    setStatus('down', 'config missing');
-    console.error('Fill in SUPABASE_URL and SUPABASE_ANON_KEY in script.js');
-    return;
-  }
+  try { await loadInitialPrices(); } catch(e) { console.error('[BOOT] prices failed:', e); }
+  try { subscribePrices(); }         catch(e) { console.error('[BOOT] subscribe failed:', e); }
 
-  // Price feed — wrapped so a Supabase error never kills login
-  try {
-    await loadInitialPrices();
-  } catch(err) {
-    console.error('[BOOT] loadInitialPrices failed:', err);
-  }
-  try {
-    subscribePrices();
-  } catch(err) {
-    console.error('[BOOT] subscribePrices failed:', err);
-  }
-
-  // Restore session
   try {
     const saved = localStorage.getItem('session');
     if (saved) session = JSON.parse(saved);
   } catch { session = null; }
 
   if (session) {
-    console.log('[BOOT] Session found:', session.mobile);
     const overlay = document.getElementById('loginOverlay');
     if (overlay) overlay.style.display = 'none';
-    try { bootDashboard(); } catch(err) { console.error('[BOOT] bootDashboard failed:', err); }
-    try {
-      await syncData();
-      console.log('[BOOT] syncData done. positions:', positions.length);
-    } catch(err) { console.error('[BOOT] syncData failed:', err); }
+    try { bootDashboard(); } catch(e) { console.error('[BOOT] bootDashboard failed:', e); }
+    try { await syncData(); } catch(e) { console.error('[BOOT] syncData failed:', e); }
   }
 })();
