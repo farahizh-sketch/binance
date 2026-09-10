@@ -189,7 +189,7 @@ function subscribePrices() {
 
 function updatePrice(symbol, bid, ask) {
   priceMap[symbol] = { bid, ask };
-  document.getElementById('asOf').textContent = 'as of ' + new Date().toLocaleTimeString();
+  document.getElementById('asOf').textContent = '@ ' + new Date().toLocaleTimeString();
   upsertRow(symbol, bid, ask);
 
   // live-refresh open buy modal
