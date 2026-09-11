@@ -14,6 +14,20 @@ function getIST() {
     .replace(' ', 'T') + '+05:30';
 }
 
+// ── STALE PRICE CHECK ─────────────────────────────────────────────────────
+// Called before any trade — checks updated_at in live_prices table.
+// Even if a user bypasses the browser JS, the server rejects stale orders.
+async function isPriceFresh(symbol, maxAgeSeconds = 10) {
+  const { data, error } = await supabase
+    .from('live_prices')
+    .select('updated_at')
+    .eq('symbol', symbol)
+    .single();
+  if (error || !data) return false;
+  const ageMs = Date.now() - new Date(data.updated_at).getTime();
+  return ageMs <= maxAgeSeconds * 1000;
+}
+
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -94,6 +108,8 @@ module.exports = async (req, res) => {
       // ── POSITIONS ─────────────────────────────────────────────────────────
       case 'addPosition': {
         const { mobile, symbol, side, quantity, entry_price } = payload;
+        const fresh = await isPriceFresh(symbol);
+        if (!fresh) return res.json({ error: `Price feed for ${symbol} is stale. Order rejected.` });
         const { data, error } = await supabase
           .from('positions')
           .insert({ mobile, symbol, side, quantity, entry_price, opened_at: getIST() })
@@ -118,6 +134,8 @@ module.exports = async (req, res) => {
       // ── ORDERS ────────────────────────────────────────────────────────────
       case 'placeOrder': {
         const { mobile, symbol, side, quantity, price } = payload;
+        const fresh = await isPriceFresh(symbol);
+        if (!fresh) return res.json({ error: `Price feed for ${symbol} is stale. Order rejected.` });
         const { data, error } = await supabase
           .from('orders')
           .insert({ mobile, symbol, side, quantity, price, created_at: getIST() })
