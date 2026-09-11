@@ -61,6 +61,20 @@ body { background: var(--bg); color: var(--text); font-family: 'Inter', system-u
   padding: 2px 8px; border-radius: 3px; border: none; cursor: pointer; background: #991b1b; color: #fca5a5; }
 .btn-sell-inline:hover { background: #7f1d1d; }
 
+/* ── MARGIN BAR ──────────────────────────────────────────────────────────── */
+.margin-bar { display: flex; gap: 1px; background: var(--border); border: 1px solid var(--border);
+  border-radius: 8px; overflow: hidden; margin-bottom: 20px; }
+.margin-bar.hidden { display: none; }
+.margin-item { flex: 1; background: var(--panel); padding: 10px 14px; display: flex;
+  flex-direction: column; gap: 3px; }
+.margin-label { font-size: 10px; color: var(--muted); text-transform: uppercase;
+  letter-spacing: .04em; font-weight: 500; }
+.margin-val { font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--text); }
+.margin-val.up   { color: var(--up); }
+.margin-val.down { color: var(--down); }
+.margin-val.warn { color: var(--accent); }
+
 /* ── PRICE TABLE ─────────────────────────────────────────────────────────── */
 main.wrap { padding: 28px 16px 60px; }
 .price-table { width: 100%; border-collapse: collapse; }
