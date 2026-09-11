@@ -58,12 +58,12 @@ function updateMarginBar() {
     levelEl.className   = 'margin-val';
   }
 
-  // ── AUTO-CLOSE: fire when free margin hits zero (used margin >= total margin)
-  const totalMargin2 = wallet * LEVERAGE;
-  const usedMargin2  = calcUsedMargin();
-  const freeMargin2  = totalMargin2 - usedMargin2;
-  if (positions.length > 0 && freeMargin2 <= 0) {
-    triggerMarginCall();
+  // ── AUTO-CLOSE: fire when total unrealised loss >= wallet balance
+  if (positions.length > 0 && !marginCallInProgress) {
+    const unrealisedPnl = calcUnrealisedPnl();
+    if (unrealisedPnl <= -session.wallet) {
+      triggerMarginCall();
+    }
   }
 }
 
