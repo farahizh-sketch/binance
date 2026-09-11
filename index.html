@@ -50,15 +50,12 @@
       <span class="asof" id="asOf"></span>
       <div class="wallet-chip" onclick="openJVModal()" id="walletChip" style="display:none">
         <span class="wallet-label">Wallet</span>
-        <span class="wallet-val">₹<span id="walletAmt">0</span></span>
+        <span class="wallet-val">$<span id="walletAmt">0</span></span>
       </div>
       <button class="btn-sm btn-ghost" id="adminBtn" style="display:none" onclick="toggleAdminPanel()">Admin</button>
       <div class="user-chip" id="userChip" style="display:none">
-        <span class="wallet-label">User</span>
         <span id="userMobileDisplay" class="wallet-val" style="color:var(--text)"></span>
-        <div style="border-top:1px solid var(--border)">
-          <button class="user-chip-logout" onclick="logout()">Logout</button>
-        </div>
+        <button class="user-chip-logout" onclick="logout()">Logout</button>
       </div>
     </div>
   </div>
