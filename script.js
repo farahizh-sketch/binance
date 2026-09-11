@@ -18,8 +18,10 @@ let sellTarget   = null;
 let jvType       = 'CREDIT';
 let widgetCtr    = 0;
 
-const LEVERAGE       = 500;
-const MARGIN_CALL_PCT = 0.99; // auto-close all if loss >= 99% of wallet
+const LEVERAGE        = 500;
+const MARGIN_CALL_PCT = 0.99;
+
+const COMMODITY_SYMBOLS = ['XAUUSD', 'XAGUSD', 'XBRUSD'];
 
 // ── MARGIN ────────────────────────────────────────────────────────────────────
 function calcUsedMargin() {
