@@ -19,7 +19,6 @@ let jvType       = 'CREDIT';
 let widgetCtr    = 0;
 
 const LEVERAGE        = 500;
-const MARGIN_CALL_PCT = 0.99;
 
 const COMMODITY_SYMBOLS = ['XAUUSD', 'XAGUSD', 'XBRUSD'];
 
@@ -59,12 +58,11 @@ function updateMarginBar() {
     levelEl.className   = 'margin-val';
   }
 
-  // ── AUTO-CLOSE: if wallet loss >= 99% of original wallet ─────────────────
-  // We compare current equity (wallet + unrealised PnL) to original wallet.
-  // If equity has fallen to ≤1% of wallet → margin call, close all.
-  const unrealisedPnl = calcUnrealisedPnl();
-  const equity        = wallet + unrealisedPnl;
-  if (positions.length > 0 && equity <= wallet * (1 - MARGIN_CALL_PCT)) {
+  // ── AUTO-CLOSE: fire when free margin hits zero (used margin >= total margin)
+  const totalMargin2 = wallet * LEVERAGE;
+  const usedMargin2  = calcUsedMargin();
+  const freeMargin2  = totalMargin2 - usedMargin2;
+  if (positions.length > 0 && freeMargin2 <= 0) {
     triggerMarginCall();
   }
 }
