@@ -18,7 +18,107 @@ let sellTarget   = null;
 let jvType       = 'CREDIT';
 let widgetCtr    = 0;
 
-const COMMODITY_SYMBOLS = ['XAUUSD', 'XAGUSD', 'XBRUSD'];
+const LEVERAGE       = 500;
+const MARGIN_CALL_PCT = 0.99; // auto-close all if loss >= 99% of wallet
+
+// ── MARGIN ────────────────────────────────────────────────────────────────────
+function calcUsedMargin() {
+  const list = session?.isAdmin ? allPositions : positions;
+  return list.reduce((sum, pos) => {
+    return sum + (pos.entry_price * Math.abs(parseFloat(pos.quantity)));
+  }, 0);
+}
+
+function updateMarginBar() {
+  if (!session) return;
+  const bar = document.getElementById('marginBar');
+  if (!bar) return;
+  bar.classList.remove('hidden');
+
+  const wallet      = session.wallet;
+  const totalMargin = wallet * LEVERAGE;
+  const usedMargin  = calcUsedMargin();
+  const freeMargin  = totalMargin - usedMargin;
+  const level       = usedMargin > 0 ? (totalMargin / usedMargin * 100) : null;
+
+  document.getElementById('marginTotal').textContent = fmtINR(totalMargin);
+  document.getElementById('marginUsed').textContent  = fmtINR(usedMargin);
+
+  const freeEl = document.getElementById('marginFree');
+  freeEl.textContent = fmtINR(freeMargin);
+  freeEl.className   = 'margin-val ' + (freeMargin < 0 ? 'down' : freeMargin < totalMargin * 0.1 ? 'warn' : 'up');
+
+  const levelEl = document.getElementById('marginLevel');
+  if (level !== null) {
+    levelEl.textContent = level.toFixed(1) + '%';
+    levelEl.className   = 'margin-val ' + (level < 110 ? 'down' : level < 150 ? 'warn' : 'up');
+  } else {
+    levelEl.textContent = '--';
+    levelEl.className   = 'margin-val';
+  }
+
+  // ── AUTO-CLOSE: if wallet loss >= 99% of original wallet ─────────────────
+  // We compare current equity (wallet + unrealised PnL) to original wallet.
+  // If equity has fallen to ≤1% of wallet → margin call, close all.
+  const unrealisedPnl = calcUnrealisedPnl();
+  const equity        = wallet + unrealisedPnl;
+  if (positions.length > 0 && equity <= wallet * (1 - MARGIN_CALL_PCT)) {
+    triggerMarginCall();
+  }
+}
+
+function calcUnrealisedPnl() {
+  const list = session?.isAdmin ? allPositions : positions;
+  return list.reduce((sum, pos) => {
+    const p      = priceMap[pos.symbol] || {};
+    const qty    = parseFloat(pos.quantity);
+    const isShort = qty < 0;
+    const ltp    = isShort ? (p.ask || pos.entry_price) : (p.bid || pos.entry_price);
+    const pnl    = isShort
+      ? (pos.entry_price - ltp) * Math.abs(qty)
+      : (ltp - pos.entry_price) * Math.abs(qty);
+    return sum + pnl;
+  }, 0);
+}
+
+let marginCallInProgress = false;
+async function triggerMarginCall() {
+  if (marginCallInProgress || !session || positions.length === 0) return;
+  marginCallInProgress = true;
+  console.warn('[MARGIN CALL] Closing all positions automatically');
+
+  const toClose = [...positions];
+  for (const pos of toClose) {
+    const p     = priceMap[pos.symbol] || {};
+    const qty   = parseFloat(pos.quantity);
+    const isShort = qty < 0;
+    const price = isShort ? (p.ask || pos.entry_price) : (p.bid || pos.entry_price);
+    const total = price * Math.abs(qty);
+    const pnl   = isShort
+      ? (pos.entry_price - price) * Math.abs(qty)
+      : (price - pos.entry_price) * Math.abs(qty);
+    const newBalance = session.wallet + total + pnl;
+
+    await Promise.all([
+      api('deletePosition', { id: pos.id }),
+      api('placeOrder', { mobile: session.mobile, symbol: pos.symbol, side: 'SELL', quantity: pos.quantity, price }),
+      api('updateWalletWithLedger', {
+        mobile: session.mobile, newBalance: Math.max(0, newBalance), type: pnl >= 0 ? 'CREDIT' : 'DEBIT',
+        amount: Math.abs(total + pnl < 0 ? total + pnl : total),
+        narration: `MARGIN CALL - AUTO CLOSE ${pos.symbol} x${Math.abs(qty)} @ ${price}`
+      })
+    ]);
+    session.wallet = Math.max(0, newBalance);
+  }
+
+  positions = [];
+  updateWalletDisplay();
+  updateMarginBar();
+  renderPositions();
+  alert('⚠️ MARGIN CALL: Your loss reached 99% of wallet. All positions have been closed automatically.');
+  marginCallInProgress = false;
+  syncData();
+}
 const COMMODITY_LABELS  = { XAUUSD: 'Gold', XAGUSD: 'Silver', XBRUSD: 'Crude' };
 const TV_SYMBOLS        = { XAUUSD: 'OANDA:XAUUSD', XAGUSD: 'OANDA:XAGUSD', XBRUSD: 'TVC:UKOIL' };
 const rowRegistry       = new Map();
@@ -186,6 +286,7 @@ function updateWalletDisplay() {
   document.getElementById('walletChip').style.display = '';
   document.getElementById('walletAmt').textContent =
     session.wallet.toLocaleString('en-IN', { minimumFractionDigits: 2 });
+  updateMarginBar();
 }
 
 // ── PRICE FEED ───────────────────────────────────────────────────────────────
@@ -224,6 +325,7 @@ function updatePrice(symbol, bid, ask) {
     calcBuyCost();
   }
   if (sellTarget?.symbol === symbol) refreshSellModal();
+  if (session && positions.length > 0) updateMarginBar();
 }
 
 // ── ROW RENDERING ─────────────────────────────────────────────────────────────
@@ -573,6 +675,7 @@ function renderPositions() {
     </tr></thead>
     <tbody>${rows}</tbody>
   </table>`;
+  updateMarginBar();
 }
 
 // ── ORDER HISTORY ─────────────────────────────────────────────────────────────
