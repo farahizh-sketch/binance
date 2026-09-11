@@ -18,7 +18,6 @@ let sellTarget   = null;
 let jvType       = 'CREDIT';
 let widgetCtr    = 0;
 
-const LEVERAGE        = 500;
 
 const COMMODITY_SYMBOLS = ['XAUUSD', 'XAGUSD', 'XBRUSD'];
 
@@ -58,10 +57,10 @@ function updateMarginBar() {
     levelEl.className   = 'margin-val';
   }
 
-  // ── AUTO-CLOSE: fire when total unrealised loss >= wallet balance
+  // ── AUTO-CLOSE: fire when unrealised loss >= 95% of current wallet
   if (positions.length > 0 && !marginCallInProgress) {
     const unrealisedPnl = calcUnrealisedPnl();
-    if (unrealisedPnl <= -session.wallet) {
+    if (unrealisedPnl <= -(session.wallet * 0.95)) {
       triggerMarginCall();
     }
   }
@@ -116,7 +115,7 @@ async function triggerMarginCall() {
   updateWalletDisplay();
   updateMarginBar();
   renderPositions();
-  alert('⚠️ MARGIN CALL: Your loss reached 99% of wallet. All positions have been closed automatically.');
+  alert('⚠️ MARGIN CALL: Your loss reached 95% of your wallet balance. All positions have been closed automatically.');
   marginCallInProgress = false;
   syncData();
 }
@@ -481,6 +480,7 @@ async function executeBuy() {
   ]);
 
   if (posRes.error) return alert('❌ Order failed: ' + JSON.stringify(posRes.error));
+  // snapshot wallet at time of first open position
   positions.push(posRes.data);
   renderPositions();
   updateMarginBar();
