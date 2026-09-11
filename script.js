@@ -452,9 +452,13 @@ function closeBuyModal() {
   buyTarget = null;
 }
 function calcBuyCost() {
-  const qty = parseFloat(document.getElementById('buyQty').value) || 0;
-  const ask = buyTarget ? priceMap[buyTarget.symbol]?.ask || buyTarget.ask : 0;
-  document.getElementById('buyCost').textContent = fmtINR(qty * ask);
+  const qty        = parseFloat(document.getElementById('buyQty').value) || 0;
+  const ask        = buyTarget ? priceMap[buyTarget.symbol]?.ask || buyTarget.ask : 0;
+  const cost       = qty * ask;
+  const usedMargin = calcUsedMargin();
+  const freeMargin = session ? (session.wallet * LEVERAGE) - usedMargin : 0;
+  document.getElementById('buyCost').textContent =
+    fmtINR(cost) + (session ? `  (Free Margin: ${fmtINR(freeMargin)})` : '');
 }
 document.getElementById('buyQty').addEventListener('input', calcBuyCost);
 
@@ -465,9 +469,11 @@ async function executeBuy() {
   const qty = parseFloat(document.getElementById('buyQty').value);
   const { step } = qtyConfig(buyTarget.symbol);
   if (qty <= 0 || qty % step !== 0) return alert(`❌ Quantity must be a multiple of ${step}.`);
-  const price = priceMap[buyTarget.symbol]?.ask || buyTarget.ask;
-  const cost  = qty * price;
-  if (cost > session.wallet) return alert('❌ Insufficient wallet balance.');
+  const price      = priceMap[buyTarget.symbol]?.ask || buyTarget.ask;
+  const cost       = qty * price;
+  const usedMargin = calcUsedMargin();
+  const freeMargin = (session.wallet * LEVERAGE) - usedMargin;
+  if (cost > freeMargin) return alert(`❌ Insufficient free margin.\nRequired: ${fmtINR(cost)}\nFree Margin: ${fmtINR(freeMargin)}`);
 
   const newBalance = session.wallet - cost;
   const [posRes] = await Promise.all([
@@ -585,8 +591,10 @@ async function executeSell() {
 
   if (isFresh) {
     const negQty     = -Math.abs(qty);
+    const usedMargin = calcUsedMargin();
+    const freeMargin = (session.wallet * LEVERAGE) - usedMargin;
+    if (total > freeMargin) return alert(`❌ Insufficient free margin.\nRequired: ${fmtINR(total)}\nFree Margin: ${fmtINR(freeMargin)}`);
     const newBalance = session.wallet - total;
-    if (total > session.wallet) return alert('❌ Insufficient wallet balance.');
     const [posRes] = await Promise.all([
       api('addPosition', { mobile: session.mobile, symbol: sellTarget.symbol, side: 'SELL', quantity: negQty, entry_price: price }),
       api('placeOrder',  { mobile: session.mobile, symbol: sellTarget.symbol, side: 'SELL', quantity: negQty, price }),
