@@ -58,7 +58,7 @@ async function api(action, payload = {}) {
 
 // ── UTILS ────────────────────────────────────────────────────────────────────
 function fmt(n, d = 2) { return parseFloat(n).toFixed(d); }
-function fmtINR(n) { return '₹' + parseFloat(n).toLocaleString('en-IN', { minimumFractionDigits: 2 }); }
+function fmtINR(n) { return '$' + parseFloat(n).toLocaleString('en-IN', { minimumFractionDigits: 2 }); }
 function toIST(ts) {
   return new Date(ts).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false });
 }
