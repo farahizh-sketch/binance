@@ -34,7 +34,7 @@ function qtyConfig(symbol) {
 }
 
 const priceLastUpdated = new Map(); // symbol → timestamp
-const STALE_MS = 10000; // 10 seconds without update = stale
+const STALE_MS = 3000; // 10 seconds without update = stale
 
 function checkStaleRows() {
   const now = Date.now();
