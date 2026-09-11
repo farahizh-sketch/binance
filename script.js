@@ -19,6 +19,7 @@ let jvType       = 'CREDIT';
 let widgetCtr    = 0;
 
 
+const LEVERAGE        = 500;
 const COMMODITY_SYMBOLS = ['XAUUSD', 'XAGUSD', 'XBRUSD'];
 
 // ── MARGIN ────────────────────────────────────────────────────────────────────
