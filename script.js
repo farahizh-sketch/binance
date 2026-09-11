@@ -33,8 +33,8 @@ function qtyConfig(symbol) {
   return SYMBOL_QTY[symbol] || { default: 1000, step: 1000 };
 }
 
-const priceLastUpdated = new Map(); // symbol → timestamp
-const STALE_MS = 3000; // 10 seconds without update = stale
+const priceLastUpdated = new Map(); // symbol → Date (from DB updated_at)
+const STALE_MS = 10000;
 
 function checkStaleRows() {
   const now = Date.now();
@@ -44,11 +44,9 @@ function checkStaleRows() {
     entry.tr.classList.toggle('row-stale', isStale);
     if (entry.buyBtn)  entry.buyBtn.disabled  = isStale;
     if (entry.sellBtn) entry.sellBtn.disabled = isStale;
-    // also update chart row if open
-    if (entry.chartRow) entry.chartRow.classList.toggle('row-stale', isStale);
   });
 }
-setInterval(checkStaleRows, 3000);
+setInterval(checkStaleRows, 2000);
 async function api(action, payload = {}) {
   const res = await fetch('/api/supabase', {
     method: 'POST',
@@ -60,7 +58,7 @@ async function api(action, payload = {}) {
 
 // ── UTILS ────────────────────────────────────────────────────────────────────
 function fmt(n, d = 2) { return parseFloat(n).toFixed(d); }
-function fmtINR(n) { return '$' + parseFloat(n).toLocaleString('en-IN', { minimumFractionDigits: 2 }); }
+function fmtINR(n) { return '₹' + parseFloat(n).toLocaleString('en-IN', { minimumFractionDigits: 2 }); }
 function toIST(ts) {
   return new Date(ts).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false });
 }
@@ -194,14 +192,22 @@ function updateWalletDisplay() {
 async function loadInitialPrices() {
   const { data, error } = await sb.from('live_prices').select('*');
   if (error) { console.error('[PRICES] load error:', error); return; }
-  if (data) data.forEach(r => updatePrice(r.symbol, r.bid, r.ask));
+  if (data) data.forEach(r => {
+    // seed updated_at from DB so stale check is accurate from first load
+    if (r.updated_at) priceLastUpdated.set(r.symbol, new Date(r.updated_at).getTime());
+    updatePrice(r.symbol, r.bid, r.ask);
+  });
 }
 
 function subscribePrices() {
   sb.channel('live_prices_changes')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'live_prices' }, p => {
       const r = p.new;
-      if (r?.symbol) updatePrice(r.symbol, r.bid, r.ask);
+      if (!r?.symbol) return;
+      // use DB updated_at so the stale check is driven by the server clock, not the browser
+      const ts = r.updated_at ? new Date(r.updated_at).getTime() : Date.now();
+      priceLastUpdated.set(r.symbol, ts);
+      updatePrice(r.symbol, r.bid, r.ask);
     })
     .subscribe(s => {
       if (s === 'SUBSCRIBED') setStatus('live', 'live');
@@ -211,7 +217,6 @@ function subscribePrices() {
 
 function updatePrice(symbol, bid, ask) {
   priceMap[symbol] = { bid, ask };
-  priceLastUpdated.set(symbol, Date.now());
   document.getElementById('asOf').textContent = 'as of ' + new Date().toLocaleTimeString();
   upsertRow(symbol, bid, ask);
   if (buyTarget?.symbol === symbol) {
