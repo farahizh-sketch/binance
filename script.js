@@ -89,26 +89,27 @@ async function triggerMarginCall() {
 
   const toClose = [...positions];
   for (const pos of toClose) {
-    const p     = priceMap[pos.symbol] || {};
-    const qty   = parseFloat(pos.quantity);
+    const p       = priceMap[pos.symbol] || {};
+    const qty     = parseFloat(pos.quantity);
     const isShort = qty < 0;
-    const price = isShort ? (p.ask || pos.entry_price) : (p.bid || pos.entry_price);
-    const total = price * Math.abs(qty);
-    const pnl   = isShort
-      ? (pos.entry_price - price) * Math.abs(qty)
-      : (price - pos.entry_price) * Math.abs(qty);
-    const newBalance = session.wallet + total + pnl;
+    const absQty  = Math.abs(qty);
+    const price   = isShort ? (p.ask || pos.entry_price) : (p.bid || pos.entry_price);
+    const pnl     = isShort
+      ? (pos.entry_price - price) * absQty
+      : (price - pos.entry_price) * absQty;
+    const newBalance = Math.max(0, session.wallet + pnl);
 
     await Promise.all([
       api('deletePosition', { id: pos.id }),
       api('placeOrder', { mobile: session.mobile, symbol: pos.symbol, side: 'SELL', quantity: pos.quantity, price }),
       api('updateWalletWithLedger', {
-        mobile: session.mobile, newBalance: Math.max(0, newBalance), type: pnl >= 0 ? 'CREDIT' : 'DEBIT',
-        amount: Math.abs(total + pnl < 0 ? total + pnl : total),
-        narration: `MARGIN CALL - AUTO CLOSE ${pos.symbol} x${Math.abs(qty)} @ ${price}`
+        mobile: session.mobile, newBalance,
+        type: pnl >= 0 ? 'CREDIT' : 'DEBIT',
+        amount: Math.abs(pnl),
+        narration: `MARGIN CALL - AUTO CLOSE ${pos.symbol} x${absQty} @ ${price} | P&L: ${fmtINR(pnl)}`
       })
     ]);
-    session.wallet = Math.max(0, newBalance);
+    session.wallet = newBalance;
   }
 
   positions = [];
@@ -473,21 +474,16 @@ async function executeBuy() {
   const freeMargin = (session.wallet * LEVERAGE) - usedMargin;
   if (cost > freeMargin) return alert(`❌ Insufficient free margin.\nRequired: ${fmtINR(cost)}\nFree Margin: ${fmtINR(freeMargin)}`);
 
-  const newBalance = session.wallet - cost;
+  // Wallet stays UNCHANGED on open — only used margin increases
   const [posRes] = await Promise.all([
     api('addPosition', { mobile: session.mobile, symbol: buyTarget.symbol, side: 'BUY', quantity: qty, entry_price: price }),
-    api('placeOrder',  { mobile: session.mobile, symbol: buyTarget.symbol, side: 'BUY', quantity: qty, price }),
-    api('updateWalletWithLedger', {
-      mobile: session.mobile, newBalance, type: 'DEBIT', amount: cost,
-      narration: `BUY ${buyTarget.symbol} x${qty} @ ${price}`
-    })
+    api('placeOrder',  { mobile: session.mobile, symbol: buyTarget.symbol, side: 'BUY', quantity: qty, price })
   ]);
 
   if (posRes.error) return alert('❌ Order failed: ' + JSON.stringify(posRes.error));
-  session.wallet = newBalance;
-  updateWalletDisplay();
   positions.push(posRes.data);
   renderPositions();
+  updateMarginBar();
   closeBuyModal();
   alert(`✅ Bought ${qty} × ${buyTarget.symbol} @ ${price}`);
   syncData();
@@ -588,35 +584,37 @@ async function executeSell() {
   const total  = price * Math.abs(qty);
 
   if (isFresh) {
+    // Opening a short — wallet stays UNCHANGED, only used margin increases
     const negQty     = -Math.abs(qty);
     const usedMargin = calcUsedMargin();
     const freeMargin = (session.wallet * LEVERAGE) - usedMargin;
     if (total > freeMargin) return alert(`❌ Insufficient free margin.\nRequired: ${fmtINR(total)}\nFree Margin: ${fmtINR(freeMargin)}`);
-    const newBalance = session.wallet - total;
     const [posRes] = await Promise.all([
       api('addPosition', { mobile: session.mobile, symbol: sellTarget.symbol, side: 'SELL', quantity: negQty, entry_price: price }),
-      api('placeOrder',  { mobile: session.mobile, symbol: sellTarget.symbol, side: 'SELL', quantity: negQty, price }),
-      api('updateWalletWithLedger', {
-        mobile: session.mobile, newBalance, type: 'DEBIT', amount: total,
-        narration: `SELL SHORT ${sellTarget.symbol} x${Math.abs(qty)} @ ${price}`
-      })
+      api('placeOrder',  { mobile: session.mobile, symbol: sellTarget.symbol, side: 'SELL', quantity: negQty, price })
     ]);
     if (posRes.error) return alert('❌ Sell failed: ' + JSON.stringify(posRes.error));
-    session.wallet = newBalance;
-    updateWalletDisplay();
     positions.push(posRes.data);
     renderPositions();
+    updateMarginBar();
     closeSellModal();
     alert(`✅ Short sell placed: ${Math.abs(qty)} × ${sellTarget.symbol} @ ${price}`);
   } else {
-    const pnl        = (price - sellTarget.entry_price) * Math.abs(sellTarget.quantity);
-    const newBalance = session.wallet + total;
+    // Closing a position — wallet adjusts by P&L only
+    const isShort    = parseFloat(sellTarget.quantity) < 0;
+    const absQty     = Math.abs(sellTarget.quantity);
+    const pnl        = isShort
+      ? (sellTarget.entry_price - price) * absQty
+      : (price - sellTarget.entry_price) * absQty;
+    const newBalance = session.wallet + pnl;
     await Promise.all([
       api('deletePosition', { id: sellTarget.id }),
       api('placeOrder', { mobile: session.mobile, symbol: sellTarget.symbol, side: 'SELL', quantity: sellTarget.quantity, price }),
       api('updateWalletWithLedger', {
-        mobile: session.mobile, newBalance, type: 'CREDIT', amount: total,
-        narration: `CLOSE ${sellTarget.symbol} x${Math.abs(sellTarget.quantity)} @ ${price}`
+        mobile: session.mobile, newBalance,
+        type: pnl >= 0 ? 'CREDIT' : 'DEBIT',
+        amount: Math.abs(pnl),
+        narration: `CLOSE ${sellTarget.symbol} x${absQty} @ ${price} | P&L: ${fmtINR(pnl)}`
       })
     ]);
     session.wallet = newBalance;
