@@ -57,69 +57,23 @@ function updateMarginBar() {
     levelEl.textContent = '--';
     levelEl.className   = 'margin-val';
   }
-
-  // ── AUTO-CLOSE: fire when unrealised loss >= 95% of current wallet
-  if (positions.length > 0 && !marginCallInProgress) {
-    const unrealisedPnl = calcUnrealisedPnl();
-    if (unrealisedPnl <= -(session.wallet * 0.95)) {
-      triggerMarginCall();
-    }
-  }
 }
 
-function calcUnrealisedPnl() {
-  const list = session?.isAdmin ? allPositions : positions;
-  return list.reduce((sum, pos) => {
-    const p      = priceMap[pos.symbol] || {};
-    const qty    = parseFloat(pos.quantity);
-    const isShort = qty < 0;
-    const ltp    = isShort ? (p.ask || pos.entry_price) : (p.bid || pos.entry_price);
-    const pnl    = isShort
-      ? (pos.entry_price - ltp) * Math.abs(qty)
-      : (ltp - pos.entry_price) * Math.abs(qty);
-    return sum + pnl;
-  }, 0);
+// ── REALTIME POSITIONS LISTENER ───────────────────────────────────────────────
+// The liquidation engine (Supabase Edge Function) closes positions server-side.
+// This listener detects those deletions and instantly updates the browser.
+function subscribePositions() {
+  if (!session) return;
+  sb.channel('positions_changes')
+    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'positions' }, async () => {
+      await syncData();
+      if (positions.length === 0) {
+        alert('⚠️ LIQUIDATION: Your loss reached 95% of your wallet balance. All positions have been closed by the server.');
+      }
+    })
+    .subscribe();
 }
 
-let marginCallInProgress = false;
-async function triggerMarginCall() {
-  if (marginCallInProgress || !session || positions.length === 0) return;
-  marginCallInProgress = true;
-  console.warn('[MARGIN CALL] Closing all positions automatically');
-
-  const toClose = [...positions];
-  for (const pos of toClose) {
-    const p       = priceMap[pos.symbol] || {};
-    const qty     = parseFloat(pos.quantity);
-    const isShort = qty < 0;
-    const absQty  = Math.abs(qty);
-    const price   = isShort ? (p.ask || pos.entry_price) : (p.bid || pos.entry_price);
-    const pnl     = isShort
-      ? (pos.entry_price - price) * absQty
-      : (price - pos.entry_price) * absQty;
-    const newBalance = Math.max(0, session.wallet + pnl);
-
-    await Promise.all([
-      api('deletePosition', { id: pos.id }),
-      api('placeOrder', { mobile: session.mobile, symbol: pos.symbol, side: 'SELL', quantity: pos.quantity, price }),
-      api('updateWalletWithLedger', {
-        mobile: session.mobile, newBalance,
-        type: pnl >= 0 ? 'CREDIT' : 'DEBIT',
-        amount: Math.abs(pnl),
-        narration: `MARGIN CALL - AUTO CLOSE ${pos.symbol} x${absQty} @ ${price} | P&L: ${fmtINR(pnl)}`
-      })
-    ]);
-    session.wallet = newBalance;
-  }
-
-  positions = [];
-  updateWalletDisplay();
-  updateMarginBar();
-  renderPositions();
-  alert('⚠️ MARGIN CALL: Your loss reached 95% of your wallet balance. All positions have been closed automatically.');
-  marginCallInProgress = false;
-  syncData();
-}
 const COMMODITY_LABELS  = { XAUUSD: 'Gold', XAGUSD: 'Silver', XBRUSD: 'Crude' };
 const TV_SYMBOLS        = { XAUUSD: 'OANDA:XAUUSD', XAGUSD: 'OANDA:XAGUSD', XBRUSD: 'TVC:UKOIL' };
 const rowRegistry       = new Map();
@@ -279,6 +233,7 @@ function bootDashboard() {
     if (ledgerTitle) ledgerTitle.textContent = 'Client Ledger';
   }
 
+  subscribePositions();
   setInterval(syncData, 10000);
 }
 
