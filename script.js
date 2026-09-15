@@ -559,18 +559,19 @@ async function executeSell() {
     // Closing a position — wallet adjusts by P&L only
     const isShort    = parseFloat(sellTarget.quantity) < 0;
     const absQty     = Math.abs(sellTarget.quantity);
+    const closeSide  = isShort ? 'BUY' : 'SELL'; // closing a short = buying back
     const pnl        = isShort
       ? (sellTarget.entry_price - price) * absQty
       : (price - sellTarget.entry_price) * absQty;
     const newBalance = session.wallet + pnl;
     await Promise.all([
       api('deletePosition', { id: sellTarget.id }),
-      api('placeOrder', { mobile: session.mobile, symbol: sellTarget.symbol, side: 'SELL', quantity: sellTarget.quantity, price }),
+      api('placeOrder', { mobile: session.mobile, symbol: sellTarget.symbol, side: closeSide, quantity: absQty, price }),
       api('updateWalletWithLedger', {
         mobile: session.mobile, newBalance,
         type: pnl >= 0 ? 'CREDIT' : 'DEBIT',
         amount: Math.abs(pnl),
-        narration: `CLOSE ${sellTarget.symbol} x${absQty} @ ${price} | P&L: ${fmtINR(pnl)}`
+        narration: `CLOSE ${isShort ? 'SHORT' : 'LONG'} ${sellTarget.symbol} x${absQty} @ ${price} | P&L: ${fmtINR(pnl)}`
       })
     ]);
     session.wallet = newBalance;
