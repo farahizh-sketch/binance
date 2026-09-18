@@ -30,6 +30,63 @@ function calcUsedMargin() {
   }, 0);
 }
 
+function calcUnrealisedPnl() {
+  const list = session?.isAdmin ? allPositions : positions;
+  return list.reduce((sum, pos) => {
+    const p       = priceMap[pos.symbol] || {};
+    const qty     = parseFloat(pos.quantity);
+    const isShort = qty < 0;
+    const ltp     = isShort ? (p.ask || pos.entry_price) : (p.bid || pos.entry_price);
+    const pnl     = isShort
+      ? (pos.entry_price - ltp) * Math.abs(qty)
+      : (ltp - pos.entry_price) * Math.abs(qty);
+    return sum + pnl;
+  }, 0);
+}
+
+let browserLiquidationInProgress = false;
+async function browserLiquidate() {
+  if (browserLiquidationInProgress || !session || positions.length === 0) return;
+  browserLiquidationInProgress = true;
+  console.warn('[BROWSER LIQUIDATION] Closing all positions');
+
+  const toClose = [...positions];
+  let newWallet = session.wallet;
+
+  for (const pos of toClose) {
+    const p        = priceMap[pos.symbol] || {};
+    const qty      = parseFloat(pos.quantity);
+    const isShort  = qty < 0;
+    const absQty   = Math.abs(qty);
+    const price    = isShort ? (p.ask || pos.entry_price) : (p.bid || pos.entry_price);
+    const closeSide = isShort ? 'BUY' : 'SELL';
+    const pnl      = isShort
+      ? (pos.entry_price - price) * absQty
+      : (price - pos.entry_price) * absQty;
+    newWallet = Math.max(0, newWallet + pnl);
+
+    await Promise.all([
+      api('deletePosition', { id: pos.id }),
+      api('placeOrder', { mobile: session.mobile, symbol: pos.symbol, side: closeSide, quantity: absQty, price }),
+      api('updateWalletWithLedger', {
+        mobile: session.mobile, newBalance: Math.max(0, newWallet),
+        type: pnl >= 0 ? 'CREDIT' : 'DEBIT',
+        amount: Math.abs(pnl),
+        narration: `LIQUIDATION - ${pos.symbol} x${absQty} @ ${price} | P&L: ${pnl.toFixed(2)}`
+      })
+    ]);
+  }
+
+  session.wallet = Math.max(0, newWallet);
+  positions = [];
+  updateWalletDisplay();
+  updateMarginBar();
+  renderPositions();
+  browserLiquidationInProgress = false;
+  alert('⚠️ LIQUIDATION: Your loss reached 95% of wallet. All positions closed.');
+  syncData();
+}
+
 function updateMarginBar() {
   if (!session) return;
   const bar = document.getElementById('marginBar');
@@ -56,6 +113,14 @@ function updateMarginBar() {
   } else {
     levelEl.textContent = '--';
     levelEl.className   = 'margin-val';
+  }
+
+  // ── BROWSER SAFETY NET: close if loss >= 95% of current wallet ────────────
+  if (positions.length > 0 && !browserLiquidationInProgress) {
+    const unrealisedPnl = calcUnrealisedPnl();
+    if (unrealisedPnl <= -(wallet * 0.95)) {
+      browserLiquidate();
+    }
   }
 }
 
