@@ -414,8 +414,11 @@ function calcBuyCost() {
   document.getElementById('buyCost').textContent =
     fmtINR(cost) + (session ? `  (Free Margin: ${fmtINR(freeMargin)})` : '');
 }
-document.getElementById('buyQty').addEventListener('input', calcBuyCost);
-
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('loginBtn')?.addEventListener('click', handleLogin);
+  document.getElementById('regBtn')?.addEventListener('click', handleRegister);
+  document.getElementById('buyQty')?.addEventListener('input', calcBuyCost);
+});
 async function executeBuy() {
   if (!session || !buyTarget) return;
   const lastUpd = priceLastUpdated.get(buyTarget.symbol) || 0;
@@ -857,10 +860,7 @@ async function syncData() {
 }
 
 // ── BOOT ─────────────────────────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', () => {
-  document.getElementById('loginBtn')?.addEventListener('click', handleLogin);
-  document.getElementById('regBtn')?.addEventListener('click', handleRegister);
-});
+// button handlers attached in DOMContentLoaded above
 
 (async () => {
   try { await loadInitialPrices(); } catch(e) { console.error('[BOOT] prices failed:', e); }
