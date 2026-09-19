@@ -61,6 +61,12 @@ module.exports = async (req, res) => {
           .from('profiles').select('*').eq('is_admin', false).order('mobile');
         return res.json({ data, error });
       }
+       = await supabase
+          .from('profiles')
+          .update({ is_liquidating: false })
+          .eq('mobile', payload.mobile);
+        return res.json({ error });
+      }
       case 'updateProfile': {
         const { data, error } = await supabase
           .from('profiles').update(payload.data).eq('mobile', payload.mobile).select().single();
